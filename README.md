@@ -1,6 +1,6 @@
-# Sistema Integrato di Monitoraggio
+# Sistema Informativo di Monitoraggio
 
-Repository pubblica del progetto **Sistema Integrato di Monitoraggio PA (SIM)**.
+Repository pubblica del progetto **Sistema Informativo di Monitoraggio PA (SIM)**.
 
 Il codice necessario per eseguire la dashboard si trova principalmente nella cartella `03_Scripts/`.
 
