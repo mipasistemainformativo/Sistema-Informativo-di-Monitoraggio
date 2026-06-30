@@ -1,0 +1,1524 @@
+---
+title: "Conto annuale"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: scroll
+    theme: flatly
+    self_contained: false
+runtime: shiny
+params:
+  file_fact_ca_dashboard: null
+  file_dash_sections_ca: null
+  file_dash_filters_ca: null
+  file_dash_indicators_ca: null
+  file_fact_ca_coverage: null
+  file_fact_ca_regione: null
+  file_fact_ca_zona: null
+  file_fact_ca_fg: null
+  file_fact_ca_tipologia: null
+  file_fact_ca_trend: null
+  run_id_indicatori_ca: null
+  run_id_catalogo_ca: null
+---
+
+```{r setup, include=FALSE}
+options(shiny.fullstacktrace = TRUE)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  cache = FALSE
+)
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(tibble)
+  library(plotly)
+  library(DT)
+  library(htmltools)
+  library(flexdashboard)
+  library(shiny)
+  library(purrr)
+  library(scales)
+  library(sf)
+  library(leaflet)
+})
+
+# Funzioni spaziali (raccordo codice_regione ISTAT → NUTS2, geometrie giscoR)
+if (file.exists("03_Scripts/00_spatial_helpers.R")) {
+  source("03_Scripts/00_spatial_helpers.R")
+} else {
+  # Inline fallback: definisce solo le funzioni strettamente necessarie
+  normalizza_codice_regione <- function(x) stringr::str_pad(as.character(x), 2, pad = "0")
+  get_raccordo_regioni_nuts <- function() tibble::tribble(
+    ~codice_regione, ~NUTS_ID,
+    "01","ITC1","02","ITC2","03","ITC4","04","ITH1","05","ITH3",
+    "06","ITH4","07","ITC3","08","ITH5","09","ITI1","10","ITI2",
+    "11","ITI3","12","ITI4","13","ITF1","14","ITF2","15","ITF3",
+    "16","ITF4","17","ITF5","18","ITF6","19","ITG1","20","ITG2"
+  )
+  scarica_nuts2_italia <- function(year=2024, resolution="10") {
+    if (!requireNamespace("giscoR", quietly=TRUE))
+      stop("giscoR non installato. Eseguire: install.packages('giscoR')")
+    giscoR::gisco_get_nuts(year=year, nuts_level=2, country="IT",
+                            resolution=resolution, epsg=4326)
+  }
+}
+
+
+
+`%||%` <- function(x, y) {
+  if (is.null(x) || length(x) == 0L || all(is.na(x)) || !nzchar(as.character(x[[1]]))) y else x
+}
+
+validate_local_rds <- function(path, label = "File RDS") {
+  if (is.null(path) || length(path) == 0L || !nzchar(as.character(path[[1]]))) {
+    stop(label, ": parametro non valorizzato.", call. = FALSE)
+  }
+  if (!file.exists(path)) {
+    stop(label, " non trovato: ", path, call. = FALSE)
+  }
+  if (tolower(tools::file_ext(path)) != "rds") {
+    stop(label, " deve avere estensione .rds. Ricevuto: ", basename(path), call. = FALSE)
+  }
+  normalizePath(path, winslash = "/", mustWork = TRUE)
+}
+
+read_rds_param <- function(path, label) {
+  readRDS(validate_local_rds(path, label)) |> tibble::as_tibble()
+}
+
+# Parametri copiati in un oggetto ordinario, così il codice reattivo non richiama direttamente params.
+dashboard_params_ca <- list(
+  file_fact_ca_dashboard = params$file_fact_ca_dashboard,
+  file_dash_sections_ca = params$file_dash_sections_ca,
+  file_dash_filters_ca = params$file_dash_filters_ca,
+  file_dash_indicators_ca = params$file_dash_indicators_ca,
+  file_fact_ca_coverage = params$file_fact_ca_coverage,
+  file_fact_ca_regione = params$file_fact_ca_regione,
+  file_fact_ca_zona = params$file_fact_ca_zona,
+  file_fact_ca_fg = params$file_fact_ca_fg,
+  file_fact_ca_tipologia = params$file_fact_ca_tipologia,
+  file_fact_ca_trend = params$file_fact_ca_trend,
+  run_id_indicatori_ca = params$run_id_indicatori_ca %||% "non specificato",
+  run_id_catalogo_ca = params$run_id_catalogo_ca %||% "non specificato"
+)
+```
+
+```{r import-data, include=FALSE}
+FACT_CA_DASHBOARD <- read_rds_param(dashboard_params_ca$file_fact_ca_dashboard, "FACT_CA_DASHBOARD")
+DASH_SECTIONS_CA <- read_rds_param(dashboard_params_ca$file_dash_sections_ca, "DASH_SECTIONS_CA")
+DASH_FILTERS_CA <- read_rds_param(dashboard_params_ca$file_dash_filters_ca, "DASH_FILTERS_CA")
+DASH_INDICATORS_CA <- read_rds_param(dashboard_params_ca$file_dash_indicators_ca, "DASH_INDICATORS_CA")
+FACT_CA_COVERAGE <- read_rds_param(dashboard_params_ca$file_fact_ca_coverage, "FACT_CA_COVERAGE")
+FACT_CA_REGIONE <- read_rds_param(dashboard_params_ca$file_fact_ca_regione, "FACT_CA_REGIONE")
+FACT_CA_ZONA <- read_rds_param(dashboard_params_ca$file_fact_ca_zona, "FACT_CA_ZONA")
+FACT_CA_FG <- read_rds_param(dashboard_params_ca$file_fact_ca_fg, "FACT_CA_FG")
+FACT_CA_TIPOLOGIA <- read_rds_param(dashboard_params_ca$file_fact_ca_tipologia, "FACT_CA_TIPOLOGIA")
+FACT_CA_TREND <- read_rds_param(dashboard_params_ca$file_fact_ca_trend, "FACT_CA_TREND")
+
+map_fact_regionale <- FACT_CA_REGIONE %>%
+  dplyr::mutate(
+    regione_key = stringr::str_to_upper(regione_bdap),
+    copertura_perc = copertura_ca_perc
+  )
+
+fact_ca <- FACT_CA_DASHBOARD |> tibble::as_tibble()
+
+# Normalizzazione robusta per allineare il vecchio prototipo ai nomi del nuovo
+# FACT_CA_DASHBOARD. Le funzioni seguenti evitano errori quando una colonna
+# prevista come fallback non è presente nel fact.
+safe_chr_col <- function(df, col, default = NA_character_) {
+  if (col %in% names(df)) {
+    x <- as.character(df[[col]])
+    x[!nzchar(x)] <- NA_character_
+    x
+  } else {
+    rep(default, nrow(df))
+  }
+}
+
+safe_num_col <- function(df, col, default = NA_real_) {
+  if (col %in% names(df)) {
+    suppressWarnings(as.numeric(df[[col]]))
+  } else {
+    rep(default, nrow(df))
+  }
+}
+
+coalesce_chr_from <- function(df, cols, default = "Non classificato") {
+  values <- lapply(cols, function(cc) safe_chr_col(df, cc))
+  values <- c(values, list(rep(default, nrow(df))))
+  do.call(dplyr::coalesce, values)
+}
+
+coalesce_num_from <- function(df, cols, default = NA_real_) {
+  values <- lapply(cols, function(cc) safe_num_col(df, cc))
+  values <- c(values, list(rep(default, nrow(df))))
+  do.call(dplyr::coalesce, values)
+}
+
+fact_ca <- fact_ca |>
+  mutate(
+    anno = suppressWarnings(as.integer(.data$anno)),
+
+    # Flag di copertura della fonte CA. Nel nuovo fact il nome stabile è
+    # IN_FONTE_CA; fonte_conto_annuale resta solo come fallback.
+    in_fonte_ca = coalesce_num_from(
+      fact_ca,
+      c("IN_FONTE_CA", "fonte_conto_annuale"),
+      default = 0
+    ) == 1,
+
+    # Dimensioni normalizzate per i filtri e i grafici.
+    regione_dash = coalesce_chr_from(
+      fact_ca,
+      c("regione_bdap", "regione")
+    ) |>
+      stringr::str_to_title(locale = "it"),
+
+    zona_dash = coalesce_chr_from(
+      fact_ca,
+      c("zona_geografica")
+    ),
+
+    fg_dash = coalesce_chr_from(
+      fact_ca,
+      c("desc_fg", "descr_forma_giuridica_bdap")
+    ),
+
+    ateco_dash = coalesce_chr_from(
+      fact_ca,
+      c("descr_ateco_bdap", "ateco_bdap")
+    ),
+
+    tipologia_dash = coalesce_chr_from(
+      fact_ca,
+      c(
+        "desc_tipo_istituzione_ca",
+        "descr_tipologia_istat_s13_bdap",
+        "descr_categoria_ipa_bdap",
+        "descr_tipologia_ipa_bdap"
+      )
+    ),
+
+    pa_label = coalesce_chr_from(
+      fact_ca,
+      c("ragione_sociale", "codice_fiscale"),
+      default = "PA non classificata"
+    ),
+
+    # Codice regione ISTAT a 2 cifre — necessario per il join con raccordo NUTS2
+    codice_regione_dash = stringr::str_pad(
+      coalesce_chr_from(fact_ca, c("codice_reg", "codice_regione_bdap"), NA_character_),
+      width = 2, pad = "0"
+    )
+  )
+
+# ── OGGETTI SPAZIALI (una sola volta all'avvio) ───────────────────────────────
+raccordo_nuts_ca <- get_raccordo_regioni_nuts() |>
+  dplyr::mutate(codice_regione = normalizza_codice_regione(codice_regione))
+
+nuts2_it_ca <- tryCatch({
+  n <- scarica_nuts2_italia(year = 2024, resolution = "10")
+  # Nome leggibile per i popup
+  name_col <- intersect(c("NUTS_NAME","NAME_LATN","NUTS_NAME_LATN"), names(n))[1]
+  n$nome_regione_mappa <- if (!is.na(name_col)) n[[name_col]] else n$NUTS_ID
+  n
+}, error = function(e) {
+  message("[SIM-GEO] Mappe disabilitate: ", conditionMessage(e))
+  NULL
+})
+
+SIM_GEO_AVAILABLE <- !is.null(nuts2_it_ca)
+
+# ── Join robusto regione_bdap → NUTS_ID ───────────────────────────────────
+# Usa una tabella statica (no raccordo_nuts_ca, no codice_regione_dash).
+# Normalizza: uppercase + rimuove parte dopo "/".
+# Trentino → sia ITH1 (Bolzano) sia ITH2 (Trento): entrambi i poligoni colorati.
+# Compatibile con qualsiasi versione dplyr (no relationship arg).
+.reg_nuts_lookup <- tibble::tribble(
+  ~reg_norm,                    ~NUTS_ID,
+  "PIEMONTE",                   "ITC1",
+  "VALLE D'AOSTA",              "ITC2",
+  "LIGURIA",                    "ITC3",
+  "LOMBARDIA",                  "ITC4",
+  "TRENTINO-ALTO ADIGE",        "ITH1",
+  "TRENTINO-ALTO ADIGE",        "ITH2",
+  "VENETO",                     "ITH3",
+  "FRIULI-VENEZIA GIULIA",      "ITH4",
+  "EMILIA-ROMAGNA",             "ITH5",
+  "TOSCANA",                    "ITI1",
+  "UMBRIA",                     "ITI2",
+  "MARCHE",                     "ITI3",
+  "LAZIO",                      "ITI4",
+  "ABRUZZO",                    "ITF1",
+  "MOLISE",                     "ITF2",
+  "CAMPANIA",                   "ITF3",
+  "PUGLIA",                     "ITF4",
+  "BASILICATA",                 "ITF5",
+  "CALABRIA",                   "ITF6",
+  "SICILIA",                    "ITG1",
+  "SARDEGNA",                   "ITG2"
+)
+
+norm_reg <- function(x) {
+  stringr::str_to_upper(x) |>
+    stringr::str_replace_all("\\s*/.*", "") |>
+    stringr::str_trim()
+}
+
+add_nuts_id <- function(df) {
+  suppressWarnings(
+    df |>
+      dplyr::mutate(reg_norm = norm_reg(.data$regione_bdap)) |>
+      dplyr::left_join(.reg_nuts_lookup, by = "reg_norm") |>
+      dplyr::select(-reg_norm)
+  )
+}
+
+if (SIM_GEO_AVAILABLE) message("[SIM-GEO] Geometrie caricate: ", nrow(nuts2_it_ca), " NUTS2") else message("[SIM-GEO] giscoR non disponibile — mappe sostituite con bar chart")
+
+# Controlli rapidi: se questi falliscono, il problema è a monte nei file del
+# run scaricato, non nelle visualizzazioni.
+required_fact_cols_ca <- c(
+  "anno",
+  "codice_fiscale",
+  "PERSONALE_TOT",
+  "IN_FONTE_CA"
+)
+missing_fact_cols_ca <- setdiff(required_fact_cols_ca, names(fact_ca))
+if (length(missing_fact_cols_ca) > 0) {
+  stop(
+    "Colonne obbligatorie mancanti in FACT_CA_DASHBOARD: ",
+    paste(missing_fact_cols_ca, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+anni_disp <- sort(unique(fact_ca$anno[!is.na(fact_ca$anno)]))
+ultimo_anno <- max(anni_disp, na.rm = TRUE)
+anno_precedente <- if (length(anni_disp) >= 2) sort(anni_disp, decreasing = TRUE)[2] else NA_integer_
+
+# Formattatori
+fmt_n <- scales::label_number(big.mark = ".", decimal.mark = ",", accuracy = 1)
+fmt_0 <- scales::label_number(big.mark = ".", decimal.mark = ",", accuracy = 1)
+fmt_1 <- scales::label_number(big.mark = ".", decimal.mark = ",", accuracy = 0.1)
+fmt_pct <- scales::label_number(big.mark = ".", decimal.mark = ",", accuracy = 0.1, suffix = "%")
+fmt_eur <- scales::label_number(big.mark = ".", decimal.mark = ",", accuracy = 1, prefix = "€ ")
+
+# Palette coerente con il prototipo già esistente.
+col_blu <- "#2C6E9B"
+col_verde <- "#3F9C6D"
+col_arancio <- "#D98832"
+col_neutro <- "#5B6B79"
+col_warn <- "#C0504D"
+col_viola <- "#8E5B9F"
+
+pal_categ <- c(col_blu, col_verde, col_arancio, col_viola, col_warn,
+               "#4FA3A8", "#A3A847", "#B0739A", "#6E7B8B", "#D9B23C")
+
+dt_lang <- list(search = "Cerca:", lengthMenu = "Mostra _MENU_ righe",
+                info = "Da _START_ a _END_ di _TOTAL_ righe",
+                infoEmpty = "0 righe", infoFiltered = "(filtrate da _MAX_)",
+                zeroRecords = "Nessun risultato",
+                paginate = list(previous = "Prec.", `next` = "Succ."),
+                emptyTable = "Nessun dato disponibile")
+
+playout <- function(p, ...) {
+  p |>
+    layout(font = list(family = "Lato, Helvetica, Arial, sans-serif", size = 12, color = "#3C3C3C"),
+           paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "rgba(0,0,0,0)",
+           margin = list(t = 35, r = 20, l = 55, b = 50), ...) |>
+    config(displayModeBar = FALSE, locale = "it")
+}
+
+safe_sum <- function(x) sum(x, na.rm = TRUE)
+safe_div <- function(num, den) ifelse(!is.na(den) & den > 0, num / den, NA_real_)
+weighted_mean_safe <- function(x, w) {
+  ok <- !is.na(x) & !is.na(w) & w > 0
+  if (!any(ok)) return(NA_real_)
+  sum(x[ok] * w[ok], na.rm = TRUE) / sum(w[ok], na.rm = TRUE)
+}
+
+agg_ca <- function(df) {
+  # Aggregatore robusto: usa solo colonne realmente presenti nel FACT.
+  # Se una colonna non esiste, restituisce NA/0 senza interrompere la dashboard.
+  n <- nrow(df)
+  num_col <- function(col, default = NA_real_) {
+    if (col %in% names(df)) {
+      suppressWarnings(as.numeric(df[[col]]))
+    } else {
+      rep(default, n)
+    }
+  }
+  chr_col <- function(col, default = NA_character_) {
+    if (col %in% names(df)) {
+      as.character(df[[col]])
+    } else {
+      rep(default, n)
+    }
+  }
+  sum_col <- function(col) sum(num_col(col, 0), na.rm = TRUE)
+  wmean_col <- function(col, weight_col = "PERSONALE_TOT") {
+    weighted_mean_safe(num_col(col), num_col(weight_col, 0))
+  }
+
+  personale <- sum_col("PERSONALE_TOT")
+  personale_uomini <- sum_col("PERSONALE_UOMINI")
+  personale_donne <- sum_col("PERSONALE_DONNE")
+  assun <- sum_col("ASSUN_TOT")
+  cess <- sum_col("CESS_TOT")
+  under35 <- sum_col("UNDER35")
+  over55 <- sum_col("OVER55")
+  over65 <- sum_col("OVER65")
+  part_time <- sum_col("TOT_PART_TIME")
+  tempo_pieno <- sum_col("TEMPO_PIENO_TOT")
+  form_giorni <- sum_col("GIORNI_FORM_TOT")
+  form_spesa <- sum_col("SPESA_FORMAZIONE_L020")
+  passaggi <- sum_col("PASSAGGI_QUALIFICA_TOT")
+
+  # Alcune grandezze esistono nel FACT solo come indicatori già calcolati,
+  # non come numeratori assoluti. In questi casi usiamo medie ponderate.
+  gg_assenza_per_dip <- wmean_col("GG_ASSENZA_PER_DIP")
+  gg_malattia_per_dip <- wmean_col("GG_ASSENZA_MALATTIA_PER_DIP")
+  quota_precari <- wmean_col("QUOTA_PRECARI_PERC")
+
+  tibble::tibble(
+    n_pa = dplyr::n_distinct(chr_col("codice_fiscale")),
+    n_pa_con_ca = dplyr::n_distinct(chr_col("codice_fiscale")[isTRUE(TRUE) & df$in_fonte_ca]),
+    personale_tot = personale,
+    personale_uomini = personale_uomini,
+    personale_donne = personale_donne,
+    quota_donne = dplyr::coalesce(safe_div(personale_donne, personale) * 100, wmean_col("QUOTA_DONNE_PERC")),
+    quota_uomini = dplyr::coalesce(safe_div(personale_uomini, personale) * 100, wmean_col("QUOTA_UOMINI_PERC")),
+    eta_media = wmean_col("ETA_MEDIA_PA"),
+    assunzioni_tot = assun,
+    cessazioni_tot = cess,
+    saldo = sum_col("SALDO_ASSUN_CESS"),
+    turnover = dplyr::coalesce(safe_div(assun + cess, personale) * 100, wmean_col("TURNOVER_PERC")),
+    tasso_crescita = wmean_col("TASSO_CRESCITA_PERC"),
+    quota_under35 = dplyr::coalesce(safe_div(under35, personale) * 100, wmean_col("QUOTA_UNDER35_PERC")),
+    quota_over55 = dplyr::coalesce(safe_div(over55, personale) * 100, wmean_col("QUOTA_OVER55_PERC")),
+    quota_over65 = dplyr::coalesce(safe_div(over65, personale) * 100, wmean_col("QUOTA_OVER65_PERC")),
+    indice_ricambio = dplyr::coalesce(safe_div(under35, over55), wmean_col("INDICE_RICAMBIO_GENERAZIONALE")),
+    quota_lavoro_agile = wmean_col("QUOTA_LAVORO_AGILE_PERC"),
+    quota_part_time = dplyr::coalesce(safe_div(part_time, personale) * 100, wmean_col("PERC_PART_TIME")),
+    quota_tempo_pieno = dplyr::coalesce(safe_div(tempo_pieno, personale) * 100, wmean_col("PERC_TEMPO_PIENO")),
+    giorni_formazione = form_giorni,
+    giorni_form_per_dip = dplyr::coalesce(safe_div(form_giorni, personale), wmean_col("GIORNI_FORM_PER_DIPENDENTE")),
+    spesa_formazione = form_spesa,
+    spesa_form_per_dip = dplyr::coalesce(safe_div(form_spesa, personale), wmean_col("SPESA_FORMAZIONE_PER_DIPENDENTE")),
+    incidenza_spesa_form = wmean_col("INCIDENZA_SPESA_FORMAZIONE_PERC"),
+    gg_assenza_per_dip = gg_assenza_per_dip,
+    gg_malattia_per_dip = gg_malattia_per_dip,
+    passaggi_qualifica = passaggi,
+    tasso_passaggi = dplyr::coalesce(safe_div(passaggi, personale) * 100, wmean_col("TASSO_PASSAGGI_QUALIFICA_PERC")),
+    quota_laurea = wmean_col("QUOTA_LAUREA_PERC"),
+    quota_precari = quota_precari
+  )
+}
+choices_clean <- function(x) {
+  x <- as.character(x)
+  sort(unique(x[!is.na(x) & nzchar(x)]))
+}
+
+filter_ui_ca <- function(prefix, include_anno = TRUE, include_pa = FALSE) {
+  tagList(
+    if (include_pa) {
+      selectizeInput(
+        paste0(prefix, "_pa"),
+        "Amministrazione",
+        choices = setNames(fact_ca$codice_fiscale, fact_ca$pa_label) |> unique(),
+        multiple = FALSE,
+        options = list(placeholder = "Seleziona una PA")
+      )
+    },
+    if (include_anno) {
+      selectInput(
+        paste0(prefix, "_anno"),
+        "Anno",
+        choices = anni_disp,
+        selected = ultimo_anno,
+        multiple = FALSE
+      )
+    },
+    selectizeInput(paste0(prefix, "_regione"), "Regione",
+                   choices = choices_clean(fact_ca$regione_dash), multiple = TRUE,
+                   options = list(placeholder = "Tutte le regioni")),
+    selectizeInput(paste0(prefix, "_fg"), "Forma giuridica",
+                   choices = choices_clean(fact_ca$fg_dash), multiple = TRUE,
+                   options = list(placeholder = "Tutte le forme giuridiche")),
+    selectizeInput(paste0(prefix, "_ateco"), "ATECO",
+                   choices = choices_clean(fact_ca$ateco_dash), multiple = TRUE,
+                   options = list(placeholder = "Tutti i codici ATECO")),
+    selectizeInput(paste0(prefix, "_tipologia"), "Tipologia amministrativa",
+                   choices = choices_clean(fact_ca$tipologia_dash), multiple = TRUE,
+                   options = list(placeholder = "Tutte le tipologie")),
+    actionButton(paste0(prefix, "_reset"), "Azzera filtri", icon = icon("rotate-left"), class = "btn btn-default")
+  )
+}
+
+apply_filter <- function(data, column, selected) {
+  if (!is.null(selected) && length(selected) > 0L && !all(is.na(selected))) {
+    data <- data |> filter(.data[[column]] %in% selected)
+  }
+  data
+}
+
+make_ca_reactive <- function(prefix, include_anno = TRUE, include_pa = FALSE, ca_only = FALSE) {
+  reactive({
+    d <- fact_ca
+    if (include_pa) d <- apply_filter(d, "codice_fiscale", input[[paste0(prefix, "_pa")]])
+    if (include_anno) d <- apply_filter(d, "anno", as.integer(input[[paste0(prefix, "_anno")]]))
+    d <- apply_filter(d, "regione_dash", input[[paste0(prefix, "_regione")]])
+    d <- apply_filter(d, "fg_dash", input[[paste0(prefix, "_fg")]])
+    d <- apply_filter(d, "ateco_dash", input[[paste0(prefix, "_ateco")]])
+    d <- apply_filter(d, "tipologia_dash", input[[paste0(prefix, "_tipologia")]])
+    if (isTRUE(ca_only)) d <- d |> filter(in_fonte_ca)
+    d
+  })
+}
+
+register_reset_ca <- function(prefix, include_anno = TRUE, include_pa = FALSE) {
+  observeEvent(input[[paste0(prefix, "_reset")]], {
+    if (include_pa) updateSelectizeInput(session, paste0(prefix, "_pa"), selected = character(0))
+    if (include_anno) updateSelectInput(session, paste0(prefix, "_anno"), selected = ultimo_anno)
+    updateSelectizeInput(session, paste0(prefix, "_regione"), selected = character(0))
+    updateSelectizeInput(session, paste0(prefix, "_fg"), selected = character(0))
+    updateSelectizeInput(session, paste0(prefix, "_ateco"), selected = character(0))
+    updateSelectizeInput(session, paste0(prefix, "_tipologia"), selected = character(0))
+  })
+}
+
+source_note_ca <- function(extra = NULL) {
+  tags$div(
+    class = "source-note",
+    tags$strong("Fonte: "),
+    "Conto Annuale — MEF/RGS; perimetro SIM/Lista MPA.",
+    if (!is.null(extra)) tags$span(paste0(" ", extra))
+  )
+}
+
+value_box_metric <- function(value, caption, icon_name = "chart-simple", color = col_blu) {
+  valueBox(value, caption = caption, icon = icon_name, color = color)
+}
+
+plot_bar_region <- function(df, metric, title_metric, top_n = NULL) {
+  reg <- df |>
+    filter(!is.na(regione_dash), in_fonte_ca) |>
+    group_by(regione_dash) |>
+    group_modify(~agg_ca(.x)) |>
+    ungroup() |>
+    arrange(.data[[metric]])
+  if (!is.null(top_n)) reg <- reg |> slice_tail(n = top_n)
+  plot_ly(reg, y = ~factor(regione_dash, levels = regione_dash), x = reg[[metric]],
+          type = "bar", orientation = "h", marker = list(color = col_blu),
+          text = ~fmt_1(reg[[metric]]), textposition = "outside",
+          hovertext = ~paste0(regione_dash, ": ", fmt_1(reg[[metric]])), hoverinfo = "text") |>
+    playout(xaxis = list(title = title_metric), yaxis = list(title = ""),
+            margin = list(l = 160, t = 35, r = 20, b = 50))
+}
+
+plot_line_metric <- function(df, metric, label, value_suffix = NULL) {
+  tr <- df |>
+    filter(in_fonte_ca) |>
+    group_by(anno) |>
+    group_modify(~agg_ca(.x)) |>
+    ungroup() |>
+    arrange(anno)
+  plot_ly(tr, x = ~anno, y = tr[[metric]], type = "scatter", mode = "lines+markers",
+          line = list(color = col_blu), marker = list(color = col_blu),
+          text = ~paste0(anno, ": ", fmt_1(tr[[metric]]), value_suffix %||% ""), hoverinfo = "text") |>
+    playout(xaxis = list(title = "Anno"), yaxis = list(title = label))
+}
+
+message(
+  "Dashboard CA — input caricati: ",
+  format(nrow(fact_ca), big.mark = ".", decimal.mark = ","),
+  " righe fact; RUN indicatori ", dashboard_params_ca$run_id_indicatori_ca,
+  "; RUN catalogo ", dashboard_params_ca$run_id_catalogo_ca, "."
+)
+```
+
+```{css, echo=FALSE}
+.navbar, .navbar-inverse { background-color: #1f4e79; border-color: #1f4e79; }
+.navbar-inverse .navbar-nav > li > a, .navbar-inverse .navbar-brand { color: #ffffff; }
+.value-box { border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+.chart-title { font-weight: 600; }
+.source-note { font-size: 12px; color: #666; padding: 8px 0; }
+.datatables { font-size: 12px; }
+```
+
+Copertura MPA-Conto Annuale
+==============================================================================
+
+Column {.sidebar data-width=280}
+------------------------------------------------------------------------------
+
+```{r}
+filter_ui_ca("cop", include_anno = TRUE)
+# Selettore distribuzione PA (reattivo)
+selectInput("cop_dist_by", "Distribuzione PA per:",
+  choices = c(
+    "Forma giuridica"          = "fg_dash",
+    "Regione"                  = "regione_dash",
+    "Codice ATECO"             = "ateco_dash",
+    "Tipologia amministrativa" = "tipologia_dash"
+  ), selected = "fg_dash")
+cop_data <- make_ca_reactive("cop", include_anno = TRUE, ca_only = FALSE)
+register_reset_ca("cop", include_anno = TRUE)
+```
+
+Row
+------------------------------------------------------------------------------
+
+### PA da monitorare {.value-box}
+```{r}
+renderValueBox({
+  d <- cop_data()
+  value_box_metric(fmt_n(n_distinct(d$codice_fiscale)), "PA nel perimetro filtrato", "fa-building", col_neutro)
+})
+```
+
+### PA con dato Conto Annuale {.value-box}
+```{r}
+renderValueBox({
+  d <- cop_data()
+  value_box_metric(fmt_n(n_distinct(d$codice_fiscale[d$in_fonte_ca])), "PA con dato Conto Annuale", "fa-check-circle", col_verde)
+})
+```
+
+### Copertura {.value-box}
+```{r}
+renderValueBox({
+  d <- cop_data()
+  den <- n_distinct(d$codice_fiscale)
+  num <- n_distinct(d$codice_fiscale[d$in_fonte_ca])
+  pct <- safe_div(num, den) * 100
+  value_box_metric(fmt_pct(pct), "PA con dato Conto Annuale %", "fa-percentage", ifelse(pct >= 90, col_verde, col_arancio))
+})
+```
+
+### Anno selezionato {.value-box}
+```{r}
+renderValueBox({
+  value_box_metric(input$cop_anno %||% ultimo_anno, "Anno di riferimento", "fa-calendar", col_blu)
+})
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Copertura MPA-Conto Annuale per Regione
+```{r}
+leafletOutput("map_spatial_copertura", height = "420px")
+
+output$map_spatial_copertura <- renderLeaflet({
+  d <- cop_data()
+  req(nrow(d) > 0)
+
+  if (!SIM_GEO_AVAILABLE) {
+    # Fallback: bar chart orizzontale per regione
+    cop_reg <- d |>
+      group_by(regione_dash) |>
+      summarise(n_pa = n_distinct(codice_fiscale),
+                n_ca = n_distinct(codice_fiscale[in_fonte_ca]),
+                pct  = safe_div(n_ca, n_pa) * 100, .groups = "drop") |>
+      filter(!is.na(regione_dash)) |>
+      arrange(pct)
+    p <- plot_ly(cop_reg,
+        y = ~factor(regione_dash, levels = regione_dash), x = ~pct,
+        type = "bar", orientation = "h", marker = list(color = col_blu),
+        text = ~paste0(fmt_pct(pct)," (",fmt_n(n_ca),"/",fmt_n(n_pa),")"),
+        textposition = "outside", hoverinfo = "text") |>
+      playout(xaxis = list(title = "% copertura", range = c(0,110)),
+              yaxis = list(title=""), margin = list(l=160,t=35,r=20,b=50))
+    # renderLeaflet non può restituire un plotly; mostriamo messaggio
+    return(leaflet::leaflet() |>
+      leaflet::addTiles() |>
+      leaflet::addControl(
+        htmltools::HTML("<b>Mappa non disponibile</b><br>Installare il pacchetto <code>giscoR</code>"),
+        position = "center"))
+  }
+
+  dati_reg <- d |>
+    dplyr::filter(!is.na(.data$regione_bdap)) |>
+    dplyr::group_by(regione_bdap = .data$regione_bdap,
+                    regione_dash = .data$regione_dash) |>
+    dplyr::summarise(
+      n_pa      = dplyr::n_distinct(.data$codice_fiscale),
+      n_ca      = dplyr::n_distinct(.data$codice_fiscale[.data$in_fonte_ca]),
+      map_value = safe_div(n_ca, n_pa) * 100,
+      .groups = "drop"
+    ) |>
+    add_nuts_id()
+
+  map_data <- nuts2_it_ca |>
+    dplyr::left_join(dati_reg, by = "NUTS_ID")
+
+  pal <- leaflet::colorNumeric("YlGnBu", domain = map_data$map_value, na.color = "#f0f0f0")
+
+  map_data <- map_data |>
+    dplyr::mutate(
+      fill_color = pal(.data$map_value),
+      popup_html = paste0(
+        "<b>", htmltools::htmlEscape(.data$nome_regione_mappa), "</b>",
+        "<br>Copertura enti: ", ifelse(is.na(.data$map_value), "n.d.", paste0(fmt_1(.data$map_value), "%")),
+        "<br>PA con dato CA: ", ifelse(is.na(.data$n_ca),  "n.d.", fmt_n(.data$n_ca)),
+        "<br>PA perimetro: ",   ifelse(is.na(.data$n_pa),  "n.d.", fmt_n(.data$n_pa))
+      )
+    )
+
+  leaflet::leaflet(map_data) |>
+    leaflet::addProviderTiles("CartoDB.Positron") |>
+    leaflet::addPolygons(
+      fillColor = ~fill_color, fillOpacity = 0.82, weight = 1, color = "#666666",
+      popup = ~popup_html,
+      highlightOptions = leaflet::highlightOptions(weight=2,color="#333333",fillOpacity=0.9,bringToFront=TRUE)
+    ) |>
+    leaflet::addLegend(pal=pal, values=~map_value, title="Copertura enti (%)", position="bottomright")
+})
+```
+
+### Distribuzione PA per categoria 
+```{r}
+renderPlotly({
+  d   <- cop_data()
+  req(nrow(d) > 0)
+  col <- input$cop_dist_by %||% "fg_dash"
+  lbl <- switch(col,
+    fg_dash        = "Forma giuridica",
+    regione_dash   = "Regione",
+    ateco_dash     = "ATECO",
+    tipologia_dash = "Tipologia amministrativa",
+    col)
+  ESCL <- c("Non classificato", NA)
+  agg <- d |>
+    filter(!.data[[col]] %in% ESCL, !is.na(.data[[col]])) |>
+    group_by(categoria = .data[[col]]) |>
+    summarise(
+      n_pa   = n_distinct(codice_fiscale),
+      n_ca   = n_distinct(codice_fiscale[in_fonte_ca]),
+      pct_ca = safe_div(n_ca, n_pa) * 100,
+      .groups = "drop"
+    ) |>
+    arrange(desc(n_pa)) |>
+    slice_head(n = 20) |>
+    arrange(n_pa) |>
+    mutate(label = str_trunc(categoria, 55))
+  plot_ly(agg, y = ~factor(label, levels=label), x = ~n_pa,
+          type = "bar", orientation = "h",
+          marker = list(color = col_neutro),
+          text  = ~paste0(fmt_n(n_pa), "  (CA: ", fmt_pct(pct_ca), ")"),
+          textposition = "outside", hoverinfo = "text") |>
+    playout(xaxis = list(title = paste("N. PA —", lbl)),
+            yaxis = list(title = ""),
+            margin = list(l = 265, t = 35, r = 20, b = 50))
+})
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Nota
+```{r}
+source_note_ca("La copertura è calcolata sul perimetro MPA filtrato e verifica la presenza del dato nella fonte Conto Annuale. Il grafico 'Distribuzione PA' è reattivo: usa il selettore in alto nella sidebar per scegliere la classificazione (Forma giuridica, Regione, ATECO, Tipologia).")
+```
+
+Overview nazionale
+==============================================================================
+
+Column {.sidebar data-width=280}
+------------------------------------------------------------------------------
+
+```{r}
+filter_ui_ca("ov", include_anno = TRUE)
+ov_data <- make_ca_reactive("ov", include_anno = TRUE, ca_only = TRUE)
+register_reset_ca("ov", include_anno = TRUE)
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Personale totale {.value-box}
+```{r}
+renderValueBox({
+  k <- agg_ca(ov_data())
+  value_box_metric(fmt_n(k$personale_tot), "Personale totale", "fa-users", col_blu)
+})
+```
+
+### Uomini / donne {.value-box}
+```{r}
+renderValueBox({
+  k <- agg_ca(ov_data())
+  value_box_metric(paste0(fmt_pct(k$quota_donne)), "Quota di donne", "fa-venus-mars", col_viola)
+})
+```
+
+### Età media {.value-box}
+```{r}
+renderValueBox({
+  k <- agg_ca(ov_data())
+  value_box_metric(fmt_1(k$eta_media), "Età media (anni)", "fa-birthday-cake", col_neutro)
+})
+```
+
+### Quota under 35 {.value-box}
+```{r}
+renderValueBox({
+  k <- agg_ca(ov_data())
+  value_box_metric(fmt_pct(k$quota_under35), "Quota under 35", "fa-user-plus", col_verde)
+})
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Quota over 55 {.value-box}
+```{r}
+renderValueBox({
+  k <- agg_ca(ov_data())
+  value_box_metric(fmt_pct(k$quota_over55), "Quota over 55", "fa-user-clock", col_arancio)
+})
+```
+
+### Assunzioni totali {.value-box}
+```{r}
+renderValueBox({
+  k <- agg_ca(ov_data())
+  value_box_metric(fmt_n(k$assunzioni_tot), "Assunzioni totali", "fa-sign-in-alt", col_verde)
+})
+```
+
+### Cessazioni totali {.value-box}
+```{r}
+renderValueBox({
+  k <- agg_ca(ov_data())
+  value_box_metric(fmt_n(k$cessazioni_tot), "Cessazioni totali", "fa-sign-out-alt", col_warn)
+})
+```
+
+### Turnover {.value-box}
+```{r}
+renderValueBox({
+  k <- agg_ca(ov_data())
+  value_box_metric(fmt_pct(k$turnover), "Turnover", "fa-rotate", col_neutro)
+})
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Personale per fascia di età 
+```{r}
+renderPlotly({
+  d <- ov_data()
+  k <- tibble::tibble(
+    fascia = c("Under 35", "35-54", "Over 55"),
+    valore = c(
+      safe_sum(d$UNDER35),
+      pmax(safe_sum(d$PERSONALE_TOT) - safe_sum(d$UNDER35) - safe_sum(d$OVER55), 0),
+      safe_sum(d$OVER55)
+    )
+  )
+  plot_ly(k, x = ~fascia, y = ~valore, type = "bar", marker = list(color = pal_categ[1:3]),
+          text = ~fmt_n(valore), textposition = "outside", hoverinfo = "text") |>
+    playout(xaxis = list(title = ""), yaxis = list(title = "Personale"))
+})
+```
+
+### Personale totale per Regione
+```{r}
+leafletOutput("map_ov_personale", height = "420px")
+
+output$map_ov_personale <- renderLeaflet({
+  d <- ov_data()
+  req(nrow(d) > 0, SIM_GEO_AVAILABLE)
+
+  dati_reg <- d |>
+    dplyr::filter(in_fonte_ca, !is.na(.data$regione_bdap)) |>
+    dplyr::group_by(regione_bdap = .data$regione_bdap,
+                    regione_dash = .data$regione_dash) |>
+    dplyr::group_modify(~agg_ca(.x)) |>
+    dplyr::ungroup() |>
+    dplyr::mutate(map_value = .data$personale_tot) |>
+    add_nuts_id()
+
+  map_data <- nuts2_it_ca |>
+    dplyr::left_join(dati_reg, by = "NUTS_ID")
+
+  pal <- leaflet::colorNumeric("Blues", domain = map_data$map_value, na.color = "#f0f0f0")
+  map_data <- map_data |>
+    dplyr::mutate(
+      fill_color = pal(.data$map_value),
+      popup_html = paste0(
+        "<b>", htmltools::htmlEscape(.data$nome_regione_mappa), "</b>",
+        "<br>Personale totale: ", ifelse(is.na(.data$map_value), "n.d.", fmt_n(.data$map_value))
+      )
+    )
+
+  leaflet::leaflet(map_data) |>
+    leaflet::addProviderTiles("CartoDB.Positron") |>
+    leaflet::addPolygons(
+      fillColor = ~fill_color, fillOpacity = 0.82, weight = 1, color = "#666666",
+      popup = ~popup_html,
+      highlightOptions = leaflet::highlightOptions(weight=2,color="#333333",fillOpacity=0.9,bringToFront=TRUE)
+    ) |>
+    leaflet::addLegend(pal=pal, values=~map_value, title="Personale totale", position="bottomright")
+})
+```
+
+Struttura e ricambio del personale
+==============================================================================
+
+Column {.sidebar data-width=280}
+------------------------------------------------------------------------------
+
+```{r}
+filter_ui_ca("str", include_anno = TRUE)
+# Selettore per eta media e Under35/Over55
+selectInput("str_agg_by", "Visualizza per:",
+  choices = c(
+    "Regione"                  = "regione_dash",
+    "Zona geografica"          = "zona_dash",
+    "Codice ATECO"             = "ateco_dash",
+    "Tipologia amministrativa" = "tipologia_dash"
+  ), selected = "regione_dash")
+str_data <- make_ca_reactive("str", include_anno = TRUE, ca_only = TRUE)
+register_reset_ca("str", include_anno = TRUE)
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Età media {.value-box}
+```{r}
+renderValueBox({ value_box_metric(fmt_1(agg_ca(str_data())$eta_media), "Età media", "fa-birthday-cake", col_neutro) })
+```
+
+### Quota under 35 {.value-box}
+```{r}
+renderValueBox({ value_box_metric(fmt_pct(agg_ca(str_data())$quota_under35), "Quota under 35", "fa-user-plus", col_verde) })
+```
+
+### Quota over 55 {.value-box}
+```{r}
+renderValueBox({ value_box_metric(fmt_pct(agg_ca(str_data())$quota_over55), "Quota over 55", "fa-user-clock", col_arancio) })
+```
+
+### Indice ricambio {.value-box}
+```{r}
+renderValueBox({ value_box_metric(fmt_1(agg_ca(str_data())$indice_ricambio), "Indice di ricambio generazionale (Under 35 / Over55)", "fa-arrows-rotate", col_blu) })
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Composizione donne/uomini
+```{r}
+renderPlotly({
+  k <- agg_ca(str_data())
+  pie <- tibble::tibble(gruppo = c("Donne", "Uomini"), valore = c(k$personale_donne, k$personale_uomini))
+  plot_ly(pie, labels = ~gruppo, values = ~valore, type = "pie", textinfo = "label+percent",
+          marker = list(colors = c(col_viola, col_blu))) |>
+    playout(showlegend = TRUE)
+})
+```
+
+### Tempo pieno / part-time
+```{r}
+renderPlotly({
+  d <- str_data()
+  pie <- tibble::tibble(gruppo = c("Tempo pieno", "Part-time"), valore = c(safe_sum(d$TEMPO_PIENO_TOT), safe_sum(d$TOT_PART_TIME)))
+  plot_ly(pie, labels = ~gruppo, values = ~valore, type = "pie", textinfo = "label+percent",
+          marker = list(colors = c(col_blu, col_arancio))) |>
+    playout(showlegend = TRUE)
+})
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Età media per Regione
+```{r}
+radioButtons("str_map_by", NULL,
+  choices = c("Per Regione" = "regione", "Per Zona geografica" = "zona"),
+  selected = "regione", inline = TRUE)
+leafletOutput("map_str_eta", height = "400px")
+
+output$map_str_eta <- renderLeaflet({
+  d <- str_data()
+  req(nrow(d) > 0, SIM_GEO_AVAILABLE)
+  by_zona <- (input$str_map_by %||% "regione") == "zona"
+
+  dati_reg <- d |>
+    dplyr::filter(in_fonte_ca, !is.na(.data$regione_bdap)) |>
+    dplyr::group_by(regione_bdap = .data$regione_bdap,
+                    regione_dash = .data$regione_dash,
+                    zona_dash    = .data$zona_dash) |>
+    dplyr::group_modify(~agg_ca(.x)) |>
+    dplyr::ungroup() |>
+    add_nuts_id()
+
+  if (by_zona) {
+    zona_vals <- dati_reg |>
+      dplyr::filter(!is.na(zona_dash), zona_dash != "Non classificato") |>
+      dplyr::group_by(zona_dash) |>
+      dplyr::summarise(map_value = mean(eta_media, na.rm=TRUE), .groups="drop")
+    dati_reg <- dati_reg |> dplyr::left_join(zona_vals, by="zona_dash")
+  } else {
+    dati_reg <- dati_reg |> dplyr::mutate(map_value = eta_media)
+  }
+
+  dati_reg <- dati_reg |> dplyr::filter(!is.na(map_value))
+  req(nrow(dati_reg) > 0)
+  map_data <- nuts2_it_ca |> dplyr::left_join(dati_reg, by="NUTS_ID")
+  pal <- leaflet::colorNumeric(c("#1a7a3a","#f5c842","#c0392b"),
+                               domain=map_data$map_value, na.color="#e0e0e0")
+  map_data <- map_data |>
+    dplyr::mutate(
+      fill_color = pal(.data$map_value),
+      popup_html = paste0(
+        "<b>", htmltools::htmlEscape(.data$nome_regione_mappa), "</b>",
+        ifelse(by_zona & !is.na(.data$zona_dash),
+          paste0("<br><i>Zona: ", .data$zona_dash, "</i>"), ""),
+        "<br>Età media: ",
+        ifelse(is.na(.data$map_value),"n.d.",paste0(fmt_1(.data$map_value)," anni")),
+        "<br>N. PA: ", ifelse(is.na(.data$n_pa),"n.d.",fmt_n(.data$n_pa)),
+        "<br>Under 35: ",
+        ifelse(is.na(.data$quota_under35),"n.d.",fmt_pct(.data$quota_under35)),
+        "<br>Over 55: ",
+        ifelse(is.na(.data$quota_over55),"n.d.",fmt_pct(.data$quota_over55))
+      )
+    )
+  leaflet::leaflet(map_data) |>
+    leaflet::addProviderTiles("CartoDB.Positron") |>
+    leaflet::addPolygons(fillColor=~fill_color, fillOpacity=0.82,
+      weight=1, color="#888", popup=~popup_html,
+      highlightOptions=leaflet::highlightOptions(
+        weight=2, color="#333", fillOpacity=0.95, bringToFront=TRUE)) |>
+    leaflet::addLegend(pal=pal, values=~map_value,
+      title=paste0("Età media (anni)<br><small>",
+                   ifelse(by_zona,"per Zona","per Regione"),"</small>"),
+      position="bottomright",
+      labFormat=leaflet::labelFormat(suffix=" anni", digits=1))
+})
+```
+
+### Under 35 e Over 55 per aggregazione (reattivo)
+```{r}
+renderPlotly({
+  col <- input$str_agg_by %||% "regione_dash"
+  lbl <- switch(col, regione_dash="Regione", zona_dash="Zona geografica",
+                ateco_dash="ATECO", tipologia_dash="Tipologia", col)
+  ESCL <- c("Non classificato", NA)
+  d <- str_data() |>
+    filter(!is.na(.data[[col]]), !.data[[col]] %in% ESCL) |>
+    group_by(cat = .data[[col]]) |>
+    group_modify(~agg_ca(.x)) |>
+    ungroup() |>
+    arrange(quota_under35) |>
+    mutate(label = str_trunc(cat, 50))
+  plot_ly(d, y = ~factor(label, levels=label), x = ~quota_under35,
+          type = "bar", orientation = "h", name = "Under 35 →",
+          marker = list(color = col_verde)) |>
+    add_trace(x = ~quota_over55, name = "← Over 55",
+              marker = list(color = col_arancio)) |>
+    playout(barmode = "overlay",
+            xaxis = list(title = paste("% personale —", lbl)),
+            yaxis = list(title = ""),
+            legend = list(orientation="h", y=-0.12),
+            margin = list(l=260,t=35,r=20,b=50),
+            shapes = list(list(type="line",x0=0,x1=0,y0=0,y1=1,
+              yref="paper",line=list(color="#777",width=1,dash="dot"))))
+})
+```
+
+Formazione del personale
+==============================================================================
+
+Column {.sidebar data-width=280}
+------------------------------------------------------------------------------
+
+```{r}
+filter_ui_ca("form", include_anno = TRUE)
+form_data <- make_ca_reactive("form", include_anno = TRUE, ca_only = TRUE)
+register_reset_ca("form", include_anno = TRUE)
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Giorni formazione totale {.value-box}
+```{r}
+renderValueBox({ value_box_metric(fmt_n(agg_ca(form_data())$giorni_formazione), "Giorni di formazione totale", "fa-graduation-cap", col_blu) })
+```
+
+### Giorni per dipendente {.value-box}
+```{r}
+renderValueBox({ value_box_metric(fmt_1(agg_ca(form_data())$giorni_form_per_dip), "Giorni formazione per dipendente", "fa-chart-line", col_verde) })
+```
+
+### Spesa formazione {.value-box}
+```{r}
+renderValueBox({ value_box_metric(fmt_eur(agg_ca(form_data())$spesa_formazione), "Spesa formazione totale", "fa-euro-sign", col_arancio) })
+```
+
+### Spesa per dipendente {.value-box}
+```{r}
+renderValueBox({ value_box_metric(fmt_eur(agg_ca(form_data())$spesa_form_per_dip), "Spesa formazione per dipendente", "fa-coins", col_viola) })
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Giorni formazione per dipendente
+```{r}
+radioButtons("form_giorni_by", NULL,
+  choices  = c("Per Zona geografica" = "zona", "Per Regione" = "regione"),
+  selected = "zona", inline = TRUE)
+leafletOutput("map_form_giorni", height = "400px")
+
+output$map_form_giorni <- renderLeaflet({
+  d <- form_data()
+  req(nrow(d) > 0, SIM_GEO_AVAILABLE)
+  by_zona <- (input$form_giorni_by %||% "zona") == "zona"
+
+  dati_reg <- d |>
+    dplyr::filter(in_fonte_ca, !is.na(.data$regione_bdap)) |>
+    dplyr::group_by(regione_bdap = .data$regione_bdap,
+                    regione_dash = .data$regione_dash,
+                    zona_dash    = .data$zona_dash) |>
+    dplyr::group_modify(~agg_ca(.x)) |>
+    dplyr::ungroup() |>
+    add_nuts_id()
+
+  if (by_zona) {
+    zona_vals <- dati_reg |>
+      dplyr::filter(!is.na(zona_dash), zona_dash != "Non classificato") |>
+      dplyr::group_by(zona_dash) |>
+      dplyr::summarise(map_value = mean(.data$giorni_form_per_dip, na.rm=TRUE), .groups="drop")
+    dati_reg <- dati_reg |> dplyr::left_join(zona_vals, by="zona_dash")
+  } else {
+    dati_reg <- dati_reg |> dplyr::mutate(map_value = .data$giorni_form_per_dip)
+  }
+
+  dati_reg <- dati_reg |> dplyr::filter(!is.na(map_value))
+  req(nrow(dati_reg) > 0)
+  map_data <- nuts2_it_ca |> dplyr::left_join(dati_reg, by="NUTS_ID")
+  pal <- leaflet::colorNumeric("YlGnBu", domain=map_data$map_value, na.color="#e0e0e0")
+  map_data <- map_data |>
+    dplyr::mutate(
+      fill_color = pal(.data$map_value),
+      popup_html = paste0(
+        "<b>", htmltools::htmlEscape(.data$nome_regione_mappa), "</b>",
+        ifelse(by_zona & !is.na(.data$zona_dash),
+          paste0("<br><i>Zona: ", .data$zona_dash, "</i>"), ""),
+        "<br>Giorni form./dip.: ",
+        ifelse(is.na(.data$map_value),"n.d.",fmt_1(.data$map_value)),
+        "<br>N. PA: ", ifelse(is.na(.data$n_pa),"n.d.",fmt_n(.data$n_pa))
+      )
+    )
+  leaflet::leaflet(map_data) |>
+    leaflet::addProviderTiles("CartoDB.Positron") |>
+    leaflet::addPolygons(fillColor=~fill_color, fillOpacity=0.82,
+      weight=1, color="#888", popup=~popup_html,
+      highlightOptions=leaflet::highlightOptions(
+        weight=2, color="#333", fillOpacity=0.95, bringToFront=TRUE)) |>
+    leaflet::addLegend(pal=pal, values=~map_value,
+      title=paste0("Giorni/dip.<br><small>",
+                   ifelse(by_zona,"per Zona","per Regione"),"</small>"),
+      position="bottomright")
+})
+```
+
+### Spesa formazione per dipendente
+```{r}
+radioButtons("form_spesa_by", NULL,
+  choices  = c("Per Zona geografica" = "zona", "Per Regione" = "regione"),
+  selected = "regione", inline = TRUE)
+leafletOutput("map_form_spesa", height = "400px")
+
+output$map_form_spesa <- renderLeaflet({
+  d <- form_data()
+  req(nrow(d) > 0, SIM_GEO_AVAILABLE)
+  by_zona <- (input$form_spesa_by %||% "regione") == "zona"
+
+  dati_reg <- d |>
+    dplyr::filter(in_fonte_ca, !is.na(.data$regione_bdap)) |>
+    dplyr::group_by(regione_bdap = .data$regione_bdap,
+                    regione_dash = .data$regione_dash,
+                    zona_dash    = .data$zona_dash) |>
+    dplyr::group_modify(~agg_ca(.x)) |>
+    dplyr::ungroup() |>
+    add_nuts_id()
+
+  if (by_zona) {
+    zona_vals <- dati_reg |>
+      dplyr::filter(!is.na(zona_dash), zona_dash != "Non classificato") |>
+      dplyr::group_by(zona_dash) |>
+      dplyr::summarise(map_value = mean(.data$spesa_form_per_dip, na.rm=TRUE), .groups="drop")
+    dati_reg <- dati_reg |> dplyr::left_join(zona_vals, by="zona_dash")
+  } else {
+    dati_reg <- dati_reg |> dplyr::mutate(map_value = .data$spesa_form_per_dip)
+  }
+
+  dati_reg <- dati_reg |> dplyr::filter(!is.na(map_value))
+  req(nrow(dati_reg) > 0)
+  map_data <- nuts2_it_ca |> dplyr::left_join(dati_reg, by="NUTS_ID")
+  pal <- leaflet::colorNumeric("YlOrRd", domain=map_data$map_value, na.color="#e0e0e0")
+  map_data <- map_data |>
+    dplyr::mutate(
+      fill_color = pal(.data$map_value),
+      popup_html = paste0(
+        "<b>", htmltools::htmlEscape(.data$nome_regione_mappa), "</b>",
+        ifelse(by_zona & !is.na(.data$zona_dash),
+          paste0("<br><i>Zona: ", .data$zona_dash, "</i>"), ""),
+        "<br>Spesa form./dip.: ",
+        ifelse(is.na(.data$map_value),"n.d.",fmt_eur(.data$map_value)),
+        "<br>N. PA: ", ifelse(is.na(.data$n_pa),"n.d.",fmt_n(.data$n_pa))
+      )
+    )
+  leaflet::leaflet(map_data) |>
+    leaflet::addProviderTiles("CartoDB.Positron") |>
+    leaflet::addPolygons(fillColor=~fill_color, fillOpacity=0.82,
+      weight=1, color="#888", popup=~popup_html,
+      highlightOptions=leaflet::highlightOptions(
+        weight=2, color="#333", fillOpacity=0.95, bringToFront=TRUE)) |>
+    leaflet::addLegend(pal=pal, values=~map_value,
+      title=paste0("€/dip.<br><small>",
+                   ifelse(by_zona,"per Zona","per Regione"),"</small>"),
+      position="bottomright")
+})
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Giorni formazione per dipendente per Regione
+```{r}
+renderPlotly({ plot_bar_region(form_data(), "giorni_form_per_dip", "Giorni / dipendente") })
+```
+
+### Spesa formazione per dipendente per Regione
+```{r}
+renderPlotly({ plot_bar_region(form_data(), "spesa_form_per_dip", "Euro / dipendente") })
+```
+
+<!--
+
+Assenze e carriere
+==============================================================================
+
+Column {.sidebar data-width=280}
+------------------------------------------------------------------------------
+
+```{r}
+filter_ui_ca("ass", include_anno = TRUE)
+ass_data <- make_ca_reactive("ass", include_anno = TRUE, ca_only = TRUE)
+register_reset_ca("ass", include_anno = TRUE)
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Giorni assenza / dipendente {.value-box}
+
+```{r}
+renderValueBox({
+  value_box_metric(
+    fmt_1(agg_ca(ass_data())$gg_assenza_per_dip),
+    "Giorni medi di assenza per dipendente",
+    "fa-calendar-minus",
+    col_arancio
+  )
+})
+```
+
+### Giorni malattia / dipendente {.value-box}
+
+COMMENTATO — dato con copertura incompleta (dataset ASSENZE non ancora consolidato)
+
+```{r}
+# renderValueBox({
+#   v <- agg_ca(ass_data())$gg_malattia_per_dip
+#   lbl <- if (is.na(v))
+#     "Giorni malattia / dip. (dato non disponibile)"
+#   else
+#     "Giorni malattia / dipendente"
+#
+#   value_box_metric(
+#     fmt_1(v),
+#     lbl,
+#     "fa-notes-medical",
+#     col_warn
+#   )
+# })
+```
+
+### Passaggi qualifica {.value-box}
+
+COMMENTATO — copertura parziale (~4.700 PA su 10.000), da ricontrollare
+
+```{r}
+# renderValueBox({
+#   v <- agg_ca(ass_data())$passaggi_qualifica
+#   lbl <- if (is.na(v) || v == 0)
+#     "Passaggi qualifica (dato limitato o n.d.)"
+#   else
+#     "Passaggi di qualifica"
+#
+#   value_box_metric(
+#     fmt_n(v),
+#     lbl,
+#     "fa-arrow-up-right-dots",
+#     col_blu
+#   )
+# })
+```
+
+### Tasso passaggi {.value-box}
+
+COMMENTATO — dipende da Passaggi qualifica (dato limitato)
+
+```{r}
+# renderValueBox({
+#   value_box_metric(
+#     fmt_pct(agg_ca(ass_data())$tasso_passaggi),
+#     "Passaggi / personale",
+#     "fa-percent",
+#     col_neutro
+#   )
+# })
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Assenze per dipendente per Regione
+
+```{r}
+renderPlotly({
+  plot_bar_region(
+    ass_data(),
+    "gg_assenza_per_dip",
+    "Giorni / dipendente"
+  )
+})
+```
+
+### Passaggi di qualifica per Regione
+
+COMMENTATO — dato con copertura limitata
+
+```{r}
+# renderPlotly({
+#   plot_bar_region(
+#     ass_data(),
+#     "passaggi_qualifica",
+#     "Passaggi"
+#   )
+# })
+```
+
+-->
+
+Trend
+==============================================================================
+
+Column {.sidebar data-width=280}
+------------------------------------------------------------------------------
+
+```{r}
+filter_ui_ca("tr", include_anno = FALSE)
+tr_data <- make_ca_reactive("tr", include_anno = FALSE, ca_only = TRUE)
+register_reset_ca("tr", include_anno = FALSE)
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Personale totale — andamento
+```{r}
+renderPlotly({
+  tr <- tr_data() |> filter(in_fonte_ca) |>
+    group_by(anno) |> group_modify(~agg_ca(.x)) |> ungroup() |> arrange(anno)
+  plot_ly(tr, x = ~factor(anno), y = ~personale_tot, type = "bar",
+          marker = list(color = col_blu),
+          text  = ~fmt_n(personale_tot), textposition = "outside",
+          hovertext = ~paste0(anno,": ",fmt_n(personale_tot)), hoverinfo="text") |>
+    playout(xaxis = list(title = ""), yaxis = list(title = "Personale totale"))
+})
+```
+
+### Assunzioni, cessazioni e saldo — andamento
+```{r}
+renderPlotly({
+  tr <- tr_data() |> filter(in_fonte_ca) |>
+    group_by(anno) |> group_modify(~agg_ca(.x)) |> ungroup() |> arrange(anno)
+  plot_ly(tr, x = ~factor(anno)) |>
+    add_bars(y = ~assunzioni_tot, name = "Assunzioni",
+             marker = list(color = col_verde),
+             text  = ~fmt_n(assunzioni_tot), textposition = "outside") |>
+    add_bars(y = ~cessazioni_tot, name = "Cessazioni",
+             marker = list(color = col_warn),
+             text  = ~fmt_n(cessazioni_tot), textposition = "outside") |>
+    add_trace(y = ~saldo, type = "scatter", mode = "markers+text",
+              name = "Saldo netto",
+              marker = list(color = col_blu, size = 12, symbol = "diamond"),
+              text  = ~paste0(ifelse(saldo>=0,"+",""), fmt_n(saldo)),
+              textposition = "top center") |>
+    playout(barmode = "group",
+            xaxis = list(title = ""),
+            yaxis = list(title = "Valori assoluti"),
+            legend = list(orientation="h", y=-0.15))
+})
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Turnover e crescita del personale — andamento
+```{r}
+renderPlotly({
+  tr <- tr_data() |> filter(in_fonte_ca) |>
+    group_by(anno) |> group_modify(~agg_ca(.x)) |> ungroup() |> arrange(anno)
+  plot_ly(tr, x = ~factor(anno)) |>
+    add_bars(y = ~turnover, name = "Turnover (%)",
+             marker = list(color = col_blu),
+             text  = ~paste0(fmt_1(turnover),"%"), textposition = "outside") |>
+    add_bars(y = ~tasso_crescita, name = "Tasso di crescita netta (%)",
+             marker = list(color = col_verde),
+             text  = ~paste0(ifelse(tasso_crescita>=0,"+",""),fmt_1(tasso_crescita),"%"),
+             textposition = "outside") |>
+    playout(barmode = "group",
+            xaxis = list(title = ""),
+            yaxis = list(title = "%", ticksuffix="%"),
+            legend = list(orientation="h", y=-0.15))
+})
+```
+
+### Formazione per dipendente — andamento
+```{r}
+renderPlotly({
+  tr <- tr_data() |> filter(in_fonte_ca) |>
+    group_by(anno) |> group_modify(~agg_ca(.x)) |> ungroup() |> arrange(anno)
+  plot_ly(tr, x = ~factor(anno)) |>
+    add_bars(y = ~giorni_form_per_dip, name = "Giorni form./dip.",
+             marker = list(color = col_blu),
+             text  = ~fmt_1(giorni_form_per_dip), textposition = "outside",
+             yaxis = "y") |>
+    add_trace(y = ~spesa_form_per_dip, type = "scatter", mode = "markers+text",
+              name = "Spesa form./dip. (€)",
+              marker = list(color = col_arancio, size = 10),
+              text  = ~fmt_eur(spesa_form_per_dip), textposition = "top center",
+              yaxis = "y2") |>
+    playout(
+      xaxis  = list(title = ""),
+      yaxis  = list(title = "Giorni / dipendente", side = "left"),
+      yaxis2 = list(title = "€ / dipendente", side = "right",
+                    overlaying = "y", showgrid = FALSE),
+      legend = list(orientation = "h", y = -0.18)
+    )
+})
+```
+
+
+Vista aggregate
+==============================================================================
+
+Column {.sidebar data-width=280}
+------------------------------------------------------------------------------
+
+```{r}
+filter_ui_ca("agg", include_anno = TRUE)
+selectInput("agg_tabella", "Aggrega per:",
+  choices = c(
+    "Regione"                  = "regione",
+    "Forma giuridica"          = "fg",
+    "Tipologia amministrativa" = "tipologia",
+    "Codice ATECO"             = "ateco"
+  ), selected = "regione")
+agg_data <- make_ca_reactive("agg", include_anno = TRUE, ca_only = TRUE)
+register_reset_ca("agg", include_anno = TRUE)
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Indicatori chiave — tabella aggregata
+```{r}
+renderDT({
+  d <- agg_data()
+  req(nrow(d) > 0)
+  group_var <- switch(input$agg_tabella,
+    regione    = "regione_dash",
+    fg         = "fg_dash",
+    tipologia  = "tipologia_dash",
+    ateco      = "ateco_dash",
+    "regione_dash")
+  out <- d |>
+    filter(!is.na(.data[[group_var]]), .data[[group_var]] != "Non classificato") |>
+    group_by(.data[[group_var]]) |>
+    group_modify(~agg_ca(.x)) |>
+    ungroup() |>
+    rename(Categoria = dplyr::all_of(group_var)) |>
+    select(Categoria, n_pa, personale_tot, eta_media, quota_under35, quota_over55,
+           indice_ricambio, turnover, tasso_crescita, giorni_form_per_dip,
+           spesa_form_per_dip, gg_assenza_per_dip) |>
+    arrange(desc(personale_tot)) |>
+    rename(
+      `N. PA`              = n_pa,
+      `Personale`          = personale_tot,
+      `Età media`          = eta_media,
+      `Under 35 %`         = quota_under35,
+      `Over 55 %`          = quota_over55,
+      `Ind. ricambio`      = indice_ricambio,
+      `Turnover %`         = turnover,
+      `Crescita %`         = tasso_crescita,
+      `Gg form./dip.`      = giorni_form_per_dip,
+      `Spesa form./dip.`   = spesa_form_per_dip,
+      `Gg ass./dip.`       = gg_assenza_per_dip
+    ) |>
+    mutate(across(where(is.numeric), ~round(.x, 1)))
+
+  datatable(
+    out, rownames = FALSE, filter = "top",
+    options = list(pageLength = 20, language = dt_lang, scrollX = TRUE,
+                   columnDefs = list(list(className="dt-center", targets="_all")))
+  ) |>
+    formatRound(columns = "Personale", digits = 0, mark = ".") |>
+    formatRound(columns = c("Età media","Under 35 %","Over 55 %","Ind. ricambio",
+                             "Turnover %","Crescita %","Gg form./dip.",
+                             "Spesa form./dip.","Gg ass./dip."),
+                digits = 1, mark = ".", dec.mark = ",") |>
+    # ── SEMAFORI: verde = buono, rosso = attenzione ─────────────────────────
+    # Under 35 %: verde se >= 15%, rosso se < 10%
+    formatStyle("Under 35 %",
+      background = styleInterval(c(10, 15),
+        c("#f8d7da", "#fff3cd", "#d4edda")),
+      fontWeight = "bold") |>
+    # Over 55 %: verde se < 35%, rosso se > 50%
+    formatStyle("Over 55 %",
+      background = styleInterval(c(35, 50),
+        c("#d4edda", "#fff3cd", "#f8d7da")),
+      fontWeight = "bold") |>
+    # Ind. ricambio: verde se >= 0.5, rosso se < 0.25
+    formatStyle("Ind. ricambio",
+      background = styleInterval(c(0.25, 0.5),
+        c("#f8d7da", "#fff3cd", "#d4edda")),
+      fontWeight = "bold") |>
+    # Turnover %: verde se < 15%, rosso se > 25%
+    formatStyle("Turnover %",
+      background = styleInterval(c(15, 25),
+        c("#d4edda", "#fff3cd", "#f8d7da")),
+      fontWeight = "bold")
+})
+```
+

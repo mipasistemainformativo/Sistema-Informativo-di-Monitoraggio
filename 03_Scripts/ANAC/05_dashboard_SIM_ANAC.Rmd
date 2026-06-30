@@ -1,0 +1,991 @@
+---
+title: "ANAC — Monitoraggio Appalti"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: scroll
+    theme: cosmo
+    self_contained: false
+runtime: shiny
+params:
+  file_indicators_anac:    null
+  file_indicators_cpv_anac: null
+  file_lista_raccordo:     null
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+suppressPackageStartupMessages({
+  library(shiny)
+  library(flexdashboard)
+  library(jsonlite)
+  library(dplyr)
+  library(plotly)
+  library(tidyr)
+  library(leaflet)
+  library(sf)
+  library(DT)
+  library(ggplot2)
+})
+
+# caricamento e preparazione dati
+
+df_anac_raw <- fromJSON(params$file_indicators_anac) %>%
+  mutate(ind_val = as.numeric(ind_val))
+
+df_cpv_raw <- fromJSON(params$file_indicators_cpv_anac) %>%
+  mutate(ind_val = as.numeric(ind_val))
+
+lista_cpv <- df_cpv_raw %>%
+  filter(!is.na(cpv)) %>%
+  pull(cpv) %>% unique() %>% sort()
+
+lista_fg_cpv <- df_cpv_raw %>%
+  filter(sub_fil == "fil_fg" | subsub_fil == "fil_fg") %>%
+  pull(ifelse(sub_fil == "fil_fg", sub_fil_val, subsub_fil_val)) %>%
+  unique() %>% sort()
+
+mappatura_regioni <- readRDS(params$file_lista_raccordo) %>%
+  select(codice_fiscale, codice_reg, regione_bdap) %>%
+  distinct()
+
+geojson_url <- "https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson"
+regioni_shape <- read_sf(geojson_url) %>%
+  mutate(reg_code = sprintf("%02d", as.numeric(reg_istat_code_num)))
+
+# PRE-AGGREGAZIONE NAZIONALE (ind1-ind9)
+df_anac_nat <- df_anac_raw %>%
+  filter(ind %in% paste0("ind", 1:9), fil == "fil_anno") %>%
+  group_by(fil_val, ind) %>%
+  summarise(val_nazionale = mean(ind_val, na.rm = TRUE), .groups = "drop")
+
+nomi_regioni_univoci <- mappatura_regioni %>%
+  filter(!is.na(regione_bdap)) %>%
+  select(codice_reg, regione_bdap) %>%
+  distinct(codice_reg, .keep_all = TRUE)
+
+lista_fg <- df_anac_raw %>%
+  filter(!is.na(subsub_fil_val), subsub_fil == "fil_fg") %>%
+  pull(subsub_fil_val) %>%
+  unique() %>%
+  sort()
+
+# AGGREGAZIONE REGIONALE — tier annuale
+df_pa_annuale <- df_anac_raw %>%
+  filter(ind %in% c("ind10", "ind11", "ind15", "ind18", "ind19", "ind20"), fil == "fil_anno") %>%
+  left_join(mappatura_regioni %>% select(codice_fiscale, codice_reg), by = c("pa" = "codice_fiscale")) %>%
+  filter(!is.na(codice_reg)) %>%
+  mutate(codice_reg = sprintf("%02d", as.numeric(codice_reg))) %>%
+  select(codice_reg, fil_val, pa, ind, ind_val) %>%
+  pivot_wider(names_from = ind, values_from = ind_val)
+
+df_reg_annuale <- df_pa_annuale %>%
+  group_by(codice_reg, fil_val) %>%
+  summarise(
+    ind10 = sum(ind10, na.rm = TRUE),
+    ind11 = sum(ind11, na.rm = TRUE),
+    ind15 = sum(ind15, na.rm = TRUE),
+    ind18 = if (sum(ind10, na.rm = TRUE) > 0) sum(ind18 * ind10, na.rm = TRUE) / sum(ind10, na.rm = TRUE) else NA_real_,
+    ind19 = if (sum(ind10, na.rm = TRUE) > 0) sum(ind19 * ind10, na.rm = TRUE) / sum(ind10, na.rm = TRUE) else NA_real_,
+    ind20 = if (sum(ind10, na.rm = TRUE) > 0) sum(ind20 * ind10, na.rm = TRUE) / sum(ind10, na.rm = TRUE) else NA_real_,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ind14 = if_else(ind10 > 0, ind11 / ind10 * 100, NA_real_),
+    ind16 = if_else(ind10 > 0, ind15 / ind10, NA_real_)
+  ) %>%
+  pivot_longer(cols = starts_with("ind"), names_to = "ind", values_to = "ind_val") %>%
+  mutate(sub_fil_val = NA_character_)
+
+# AGGREGAZIONE REGIONALE — tier mensile
+df_pa_mensile <- df_anac_raw %>%
+  filter(ind %in% c("ind21", "ind22", "ind26", "ind29", "ind30", "ind31"), fil == "fil_anno", sub_fil == "fil_mese") %>%
+  left_join(mappatura_regioni %>% select(codice_fiscale, codice_reg), by = c("pa" = "codice_fiscale")) %>%
+  filter(!is.na(codice_reg)) %>%
+  mutate(codice_reg = sprintf("%02d", as.numeric(codice_reg))) %>%
+  select(codice_reg, fil_val, sub_fil_val, pa, ind, ind_val) %>%
+  pivot_wider(names_from = ind, values_from = ind_val)
+
+df_reg_mensile <- df_pa_mensile %>%
+  group_by(codice_reg, fil_val, sub_fil_val) %>%
+  summarise(
+    ind21 = sum(ind21, na.rm = TRUE),
+    ind22 = sum(ind22, na.rm = TRUE),
+    ind26 = sum(ind26, na.rm = TRUE),
+    ind29 = if (sum(ind21, na.rm = TRUE) > 0) sum(ind29 * ind21, na.rm = TRUE) / sum(ind21, na.rm = TRUE) else NA_real_,
+    ind30 = if (sum(ind21, na.rm = TRUE) > 0) sum(ind30 * ind21, na.rm = TRUE) / sum(ind21, na.rm = TRUE) else NA_real_,
+    ind31 = if (sum(ind21, na.rm = TRUE) > 0) sum(ind31 * ind21, na.rm = TRUE) / sum(ind21, na.rm = TRUE) else NA_real_,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ind25 = if_else(ind21 > 0, ind22 / ind21 * 100, NA_real_),
+    ind27 = if_else(ind21 > 0, ind26 / ind21, NA_real_)
+  ) %>%
+  pivot_longer(cols = starts_with("ind"), names_to = "ind", values_to = "ind_val")
+
+df_anac_reg <- bind_rows(df_reg_annuale, df_reg_mensile) %>%
+  left_join(nomi_regioni_univoci, by = "codice_reg")
+
+nomi_indicatori_reg <- c(
+  ind10 = "Numero Gare", ind11 = "Gare Aggiudicate (n)", ind14 = "% Aggiudicazione",
+  ind15 = "Importo Totale (€)", ind16 = "Importo Medio per Gara (€)",
+  ind18 = "Durata Media Prevista (gg)", ind19 = "Giorni Scadenza-Esito",
+  ind20 = "Finestra Partecipazione (gg)",
+  ind21 = "Gare (Mese)", ind22 = "Aggiudicate (Mese)", ind25 = "% Aggiudicazione (Mese)",
+  ind26 = "Importo Totale Mese (€)", ind27 = "Importo Medio per Gara - Mese (€)",
+  ind29 = "Durata Media Prevista - Mese (gg)", ind30 = "Giorni Scadenza-Esito - Mese",
+  ind31 = "Finestra Partecipazione - Mese (gg)"
+)
+
+fmt_valore_indicatore <- function(x, ind_code) {
+  if (ind_code %in% c("ind14", "ind25", "ind36")) {
+    paste0(format(round(x, 1), decimal.mark = ","), "%")
+  } else if (ind_code %in% c("ind15", "ind16", "ind26", "ind27", "ind37", "ind38")) {
+    paste0("€ ", format(round(x, 0), big.mark = ".", decimal.mark = ","))
+  } else if (ind_code %in% c("ind18", "ind19", "ind20", "ind29", "ind30", "ind31", "ind40", "ind41", "ind42")) {
+    paste0(format(round(x, 1), decimal.mark = ","), " gg")
+  } else {
+    format(round(x, 0), big.mark = ".", decimal.mark = ",")
+  }
+}
+
+# CONFRONTO FORME GIURIDICHE (ind32-42)
+df_pa_fg <- df_anac_raw %>%
+  filter(ind %in% c("ind32", "ind33", "ind37", "ind40", "ind41", "ind42"), fil == "fil_anno", sub_fil == "fil_fg") %>%
+  select(fil_val, sub_fil_val, pa, ind, ind_val) %>%
+  pivot_wider(names_from = ind, values_from = ind_val)
+
+df_fg_confronto <- df_pa_fg %>%
+  group_by(sub_fil_val, fil_val) %>%
+  summarise(
+    ind32 = sum(ind32, na.rm = TRUE),
+    ind33 = sum(ind33, na.rm = TRUE),
+    ind37 = sum(ind37, na.rm = TRUE),
+    ind40 = if (sum(ind32, na.rm = TRUE) > 0) sum(ind40 * ind32, na.rm = TRUE) / sum(ind32, na.rm = TRUE) else NA_real_,
+    ind41 = if (sum(ind32, na.rm = TRUE) > 0) sum(ind41 * ind32, na.rm = TRUE) / sum(ind32, na.rm = TRUE) else NA_real_,
+    ind42 = if (sum(ind32, na.rm = TRUE) > 0) sum(ind42 * ind32, na.rm = TRUE) / sum(ind32, na.rm = TRUE) else NA_real_,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ind36 = if_else(ind32 > 0, ind33 / ind32 * 100, NA_real_),
+    ind38 = if_else(ind32 > 0, ind37 / ind32, NA_real_)
+  )
+
+nomi_indicatori_fg <- c(
+  ind32 = "Numero Gare", ind33 = "Gare Aggiudicate (n)", ind36 = "% Aggiudicazione",
+  ind37 = "Importo Totale (€)", ind38 = "Importo Medio per Gara (€)",
+  ind40 = "Durata Media Prevista (gg)", ind41 = "Giorni Scadenza-Esito",
+  ind42 = "Finestra Partecipazione (gg)"
+)
+```
+
+Overview Nazionale {data-icon="fa-chart-bar"}
+=======================================================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Filtri
+
+```{r}
+selectInput("anno_ov", "Anno:",
+            choices = sort(unique(df_anac_nat$fil_val), decreasing = TRUE))
+
+helpText(
+  HTML(
+    "<div style='font-size: 12px; color: #666; line-height: 1.5;'>",
+    "<strong>Fonte:</strong> ANAC<br>",
+    "<strong>Annualità:</strong> 2023",
+    "</div>"
+  )
+)
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Enti ANAC nel perimetro MPA (n) {.value-box}
+
+```{r}
+renderValueBox({
+  val <- df_anac_nat %>% filter(ind == "ind1", fil_val == input$anno_ov) %>% pull(val_nazionale)
+  val <- if (length(val) == 0) 0 else val[1]
+  valueBox(format(val, big.mark = ".", decimal.mark = ","), icon = "fa-university", color = "primary")
+})
+```
+
+### Copertura (%) {.value-box}
+
+```{r}
+renderValueBox({
+  val <- df_anac_nat %>% filter(ind == "ind2", fil_val == input$anno_ov) %>% pull(val_nazionale)
+  val <- if (length(val) == 0) 0 else val[1]
+  valueBox(paste0(format(val, decimal.mark = ",", nsmall = 2), "%"), icon = "fa-percent", color = "primary")
+})
+```
+
+### Importo di lotto medio {.value-box}
+
+```{r}
+renderValueBox({
+  val <- df_anac_nat %>% filter(ind == "ind5", fil_val == input$anno_ov) %>% pull(val_nazionale)
+  val <- if (length(val) == 0) 0 else val[1]
+  valueBox(paste0("€ ", format(val, big.mark = ".", decimal.mark = ",", nsmall = 2)), icon = "fa-euro-sign", color = "primary")
+})
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Numero totale di gare {.value-box}
+
+```{r}
+renderValueBox({
+  val <- df_anac_nat %>% filter(ind == "ind3", fil_val == input$anno_ov) %>% pull(val_nazionale)
+  val <- if (length(val) == 0) 0 else val[1]
+  valueBox(format(val, big.mark = ".", decimal.mark = ","), icon = "fa-folder-open", color = "success")
+})
+```
+
+### Numero totale di gare aggiudicate (n) {.value-box}
+
+```{r}
+renderValueBox({
+  val <- df_anac_nat %>% filter(ind == "ind4", fil_val == input$anno_ov) %>% pull(val_nazionale)
+  val <- if (length(val) == 0) 0 else val[1]
+  valueBox(format(val, big.mark = ".", decimal.mark = ","), icon = "fa-database", color = "success")
+})
+```
+
+### Gare aggiudicate (%) {.value-box}
+
+```{r}
+renderValueBox({
+  val <- df_anac_nat %>% filter(ind == "ind9", fil_val == input$anno_ov) %>% pull(val_nazionale)
+  val <- if (length(val) == 0) 0 else val[1]
+  valueBox(paste0(format(val, decimal.mark = ",", nsmall = 2), "%"), icon = "fa-check", color = "success")
+})
+```
+
+
+
+Row
+-----------------------------------------------------------------------
+
+### Durata Prevista Media {.value-box}
+
+```{r}
+renderValueBox({
+  val <- df_anac_nat %>% filter(ind == "ind6", fil_val == input$anno_ov) %>% pull(val_nazionale)
+  val <- if (length(val) == 0) 0 else val[1]
+  valueBox(paste0(format(val, decimal.mark = ",", nsmall = 2), " gg"), icon = "fa-hourglass-half", color = "warning")
+})
+```
+
+### Tempo medio scadenza-esito {.value-box}
+
+```{r}
+renderValueBox({
+  val <- df_anac_nat %>% filter(ind == "ind7", fil_val == input$anno_ov) %>% pull(val_nazionale)
+  val <- if (length(val) == 0) 0 else val[1]
+  valueBox(paste0(format(val, decimal.mark = ",", nsmall = 2), " gg"), icon = "fa-clock", color = "warning")
+})
+```
+
+### Tempo medio finestra partecipazione {.value-box}
+
+```{r}
+renderValueBox({
+  val <- df_anac_nat %>% filter(ind == "ind8", fil_val == input$anno_ov) %>% pull(val_nazionale)
+  val <- if (length(val) == 0) 0 else val[1]
+  valueBox(paste0(format(val, decimal.mark = ",", nsmall = 2), " gg"), icon = "fa-hourglass-half", color = "warning")
+})
+```
+
+Row {data-height=400}
+-----------------------------------------------------------------------
+
+### Top 5 settori per valore economico (€)
+
+```{r}
+renderPlotly({
+  req(input$anno_ov)
+  
+  format_ita <- function(x) {
+    sapply(x, function(v) {
+      if (is.na(v) || v == 0) return("0")
+      abs_v <- abs(v)
+      if (abs_v >= 1e9) {
+        paste0(round(v / 1e9, 1), " Mld")
+      } else if (abs_v >= 1e6) {
+        paste0(round(v / 1e6, 1), " Mil")
+      } else if (abs_v >= 1e3) {
+        paste0(round(v / 1e3, 1), " K")
+      } else {
+        as.character(round(v, 0))
+      }
+    })
+  }
+  
+  top <- df_cpv_raw %>%
+    filter(ind == "ind7", fil == "fil_anno", fil_val == input$anno_ov) %>%
+    group_by(cpv) %>%
+    summarise(v = sum(ind_val, na.rm = TRUE)) %>%
+    arrange(desc(v)) %>%
+    head(5)
+  top$cpv <- stringr::str_wrap(top$cpv, width = 30)
+  
+  p <- ggplot(top, aes(x = reorder(cpv, v), y = v)) +
+    geom_col(fill = "#b5a4d4") + 
+    coord_flip() + 
+    theme_minimal() +
+    scale_y_continuous(
+      labels = format_ita,
+      expand = expansion(mult = c(0, 0.05))
+    ) +
+    labs(x = NULL, y = "Importo totale")
+  
+  ggplotly(p) %>% 
+    layout(
+      margin = list(l = 150),
+      yaxis = list(tickformat = ",.0f")
+    )
+})
+```
+
+### Top 5 settori per volume di gara (n)
+
+```{r}
+renderPlotly({
+  req(input$anno_ov)
+  format_ita <- function(x) {
+    sapply(x, function(v) {
+      if (is.na(v) || v == 0) return("0")
+      abs_v <- abs(v)
+      if (abs_v >= 1e9) {
+        paste0(round(v / 1e9, 1), " Mld")
+      } else if (abs_v >= 1e6) {
+        paste0(round(v / 1e6, 1), " Mil")
+      } else if (abs_v >= 1e3) {
+        paste0(round(v / 1e3, 1), " K")
+      } else {
+        as.character(round(v, 0))
+      }
+    })
+  }
+  
+  top <- df_cpv_raw %>%
+    filter(ind == "ind1", fil == "fil_anno", fil_val == input$anno_ov) %>%
+    group_by(cpv) %>%
+    summarise(v = sum(ind_val, na.rm = TRUE)) %>%
+    arrange(desc(v)) %>%
+    head(5)
+  top$cpv <- stringr::str_wrap(top$cpv, width = 30)
+  
+  p <- ggplot(top, aes(x = reorder(cpv, v), y = v)) +
+    geom_col(fill = "#b5a4d4") + 
+    coord_flip() + 
+    theme_minimal() +
+    scale_y_continuous(
+      labels = format_ita,
+      expand = expansion(mult = c(0, 0.05))
+    ) +
+    labs(x = NULL, y = "Numero totale Gare")
+  
+  ggplotly(p) %>% 
+    layout(margin = list(l = 150))
+})
+```
+
+Ripartizione Territoriale {data-icon="fa-map"}
+=======================================================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Filtri Geografici
+
+```{r}
+selectInput("anno_reg", "Anno:",
+            choices = sort(unique(df_anac_reg$fil_val), decreasing = TRUE))
+
+selectInput("ind_reg", "Indicatore:",
+            choices = list(
+              "Dati Annuali" = c(
+                "Numero Gare"               = "ind10",
+                "Aggiudicate"               = "ind11",
+                "% Aggiudicazione"          = "ind14",
+                "Importo Totale"            = "ind15",
+                "Importo Medio per Gara"    = "ind16",
+                "Durata Media Prevista (gg)"= "ind18",
+                "Giorni Scadenza-Esito"     = "ind19",
+                "Finestra Partecipazione"   = "ind20"
+              ),
+              "Dati Mensili" = c(
+                "Gare (Mese)"                    = "ind21",
+                "Aggiudicate (Mese)"             = "ind22",
+                "% Aggiudicazione (Mese)"        = "ind25",
+                "Importo (Mese)"                 = "ind26",
+                "Importo Medio per Gara (Mese)"  = "ind27",
+                "Durata Media Prevista (Mese)"   = "ind29",
+                "Giorni Scadenza-Esito (Mese)"   = "ind30",
+                "Finestra Partecipazione (Mese)" = "ind31"
+              )
+            ))
+
+conditionalPanel(
+  condition = "['ind21','ind22','ind25','ind26','ind27','ind29','ind30','ind31'].includes(input.ind_reg)",
+  selectInput("mese_reg", "Mese:", choices = sprintf("%02d", 1:12))
+)
+
+helpText(
+  HTML(
+    "<div style='font-size: 12px; color: #666; line-height: 1.5;'>",
+    "<strong>Fonte:</strong> ANAC<br>",
+    "<strong>Annualità:</strong> 2023",
+    "</div>"
+  )
+)
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Mappa Distribuzione
+
+```{r}
+leafletOutput("mappa_anac", height = "600px")
+
+output$mappa_anac <- renderLeaflet({
+  req_df <- df_anac_reg %>% filter(fil_val == input$anno_reg, ind == input$ind_reg)
+  if (input$ind_reg %in% c("ind21","ind22","ind25","ind26","ind27","ind29","ind30","ind31")) {
+    req_df <- req_df %>% filter(sub_fil_val == input$mese_reg)
+  }
+  shiny::validate(shiny::need(nrow(req_df) > 0, "Dati non disponibili."))
+  mappa_final <- regioni_shape %>% left_join(req_df, by = c("reg_code" = "codice_reg"))
+  valori_validi <- mappa_final$ind_val[!is.na(mappa_final$ind_val)]
+  shiny::validate(shiny::need(length(valori_validi) > 0, "Nessun valore disponibile per questa selezione."))
+  pal <- colorNumeric(palette = "YlGnBu", domain = valori_validi, na.color = "#f0f0f0")
+  etichetta_ind <- unname(nomi_indicatori_reg[input$ind_reg])
+  testo_valore <- ifelse(
+    is.na(mappa_final$ind_val), "Nessun dato",
+    fmt_valore_indicatore(mappa_final$ind_val, input$ind_reg)
+  )
+  etichette_popup <- paste0(mappa_final$reg_name, ": ", testo_valore)
+  colori_poligoni <- ifelse(is.na(mappa_final$ind_val), "#f0f0f0", pal(mappa_final$ind_val))
+  leaflet(mappa_final) %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    setView(lng = 12.5, lat = 41.9, zoom = 5) %>%
+    addPolygons(fillColor = colori_poligoni, weight = 1, color = "white", fillOpacity = 0.8,
+                label = etichette_popup) %>%
+    addLegend(pal = pal, values = valori_validi, title = etichetta_ind,
+              position = "bottomright", na.label = "Nessun dato")
+})
+```
+
+### Classifica Regionale
+
+```{r}
+renderPlotly({
+  res_reg <- df_anac_reg %>% filter(fil_val == input$anno_reg, ind == input$ind_reg)
+  if (input$ind_reg %in% c("ind21","ind22","ind25","ind26","ind27","ind29","ind30","ind31")) {
+    res_reg <- res_reg %>% filter(sub_fil_val == input$mese_reg)
+  }
+  res_reg <- res_reg %>% arrange(desc(ind_val))
+  etichetta_ind <- unname(nomi_indicatori_reg[input$ind_reg])
+  p <- ggplot(res_reg, aes(x = reorder(regione_bdap, ind_val), y = ind_val)) +
+    geom_col(fill = "#5DADE2") + coord_flip() + theme_minimal() +
+    labs(x = NULL, y = etichetta_ind)
+  ggplotly(p) %>% layout(margin = list(l = 150))
+})
+```
+
+
+Row {data-height=650}
+-----------------------------------------------------------------------
+
+### Confronto tra tutte le Regioni
+
+```{r}
+renderDT({
+  req(input$anno_reg)
+  tab <- df_anac_reg %>%
+    filter(fil_val == input$anno_reg, is.na(sub_fil_val),
+           ind %in% c("ind10", "ind11", "ind14", "ind15", "ind16", "ind18", "ind19", "ind20")) %>%
+    select(regione_bdap, ind, ind_val) %>%
+    pivot_wider(names_from = ind, values_from = ind_val) %>%
+    arrange(desc(ind15))
+
+  datatable(
+    tab,
+    rownames = FALSE,
+    colnames = c(
+      "Regione" = "regione_bdap", "N. Gare" = "ind10", "Aggiudicate (n)" = "ind11",
+      "Aggiudicazione (%)" = "ind14", "Importo Totale (€)" = "ind15",
+      "Importo Medio (€)" = "ind16", "Durata Prevista (gg)" = "ind18",
+      "Scadenza-Esito (gg)" = "ind19", "Finestra Partecip. (gg)" = "ind20"
+    ),
+    filter = "top",
+    extensions = c("Buttons"),           # ← aggiungi extension
+    options = list(
+      pageLength = 21,
+      order = list(list(4, "desc")),
+      dom = 'Bfrtip',                     # ← B = Buttons
+      buttons = list(
+        list(extend = 'excel', text = 'Excel', filename = 'ANAC_Distribuzione_Regionale'),
+        list(extend = 'csv', text = 'CSV', filename = 'ANAC_Distribuzione_Regionale'),
+        list(extend = 'pdf', text = 'PDF', filename = 'ANAC_Distribuzione_Regionale'),
+        list(extend = 'print', text = 'Stampa')
+      )
+    )
+  ) %>%
+    formatRound(c("Importo Totale (€)", "Importo Medio (€)"), 0) %>%
+    formatRound(c("Aggiudicazione (%)", "Durata Prevista (gg)", "Scadenza-Esito (gg)", "Finestra Partecip. (gg)"), 1)
+})
+```
+
+
+Confronto tra Forme Giuridiche {data-icon="fa-balance-scale"}
+=======================================================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Filtri
+
+```{r}
+selectInput("anno_fg", "Anno:",
+            choices = sort(unique(df_fg_confronto$fil_val), decreasing = TRUE))
+
+selectInput("metrica_fg", "Metrica da confrontare:",
+            choices = setNames(names(nomi_indicatori_fg), nomi_indicatori_fg))
+
+helpText(
+  HTML(
+    "<div style='font-size: 12px; color: #666; line-height: 1.5;'>",
+    "<strong>Fonte:</strong> ANAC<br>",
+    "<strong>Annualità:</strong> 2023",
+    "</div>"
+  )
+)
+```
+
+Row
+-----------------------------------------------------------------------
+
+### 
+
+```{r}
+renderPlotly({
+  metrica <- input$metrica_fg
+  d <- df_fg_confronto %>%
+    filter(fil_val == input$anno_fg) %>%
+    select(sub_fil_val, valore = all_of(metrica)) %>%
+    filter(!is.na(valore)) %>%
+    arrange(desc(valore))
+
+  titolo <- paste0("Confronto tra Forme Giuridiche — ",
+                   unname(nomi_indicatori_fg[metrica]),
+                   " (Anno ", input$anno_fg, ")")
+
+  p <- ggplot(d, aes(x = reorder(sub_fil_val, valore), y = valore)) +
+    geom_col(fill = "#5DADE2") + coord_flip() + theme_minimal() +
+    labs(title = titolo, x = NULL, y = unname(nomi_indicatori_fg[metrica]))
+  ggplotly(p) %>% layout(margin = list(l = 180))
+})
+```
+
+
+Row {data-height=650}
+-----------------------------------------------------------------------
+
+### Confronto tra tutte le Forme Giuridiche
+
+```{r}
+renderDT({
+  req(input$anno_fg)
+  tab <- df_fg_confronto %>%
+    filter(fil_val == input$anno_fg) %>%
+    select(sub_fil_val, ind32, ind33, ind36, ind37, ind38, ind40, ind41, ind42) %>%
+    arrange(desc(ind37))
+
+  datatable(
+    tab,
+    rownames = FALSE,
+    colnames = c(
+      "Forma Giuridica" = "sub_fil_val", "N. Gare" = "ind32", "Aggiudicate (n)" = "ind33",
+      "Aggiudicazione (%)" = "ind36", "Importo Totale (€)" = "ind37",
+      "Importo Medio (€)" = "ind38", "Durata Prevista (gg)" = "ind40",
+      "Scadenza-Esito (gg)" = "ind41", "Finestra Partecip. (gg)" = "ind42"
+    ),
+    filter = "top",
+    extensions = c("Buttons"),
+    options = list(
+      pageLength = 15,
+      order = list(list(4, "desc")),
+      dom = 'Bfrtip',
+      buttons = list(
+        list(extend = 'excel', text = 'Excel', filename = 'ANAC_Confronto_Forme_Giuridiche'),
+        list(extend = 'csv', text = 'CSV', filename = 'ANAC_Confronto_Forme_Giuridiche'),
+        list(extend = 'pdf', text = 'PDF', filename = 'ANAC_Confronto_Forme_Giuridiche'),
+        list(extend = 'print', text = 'Stampa')
+      )
+    )
+  ) %>%
+    formatRound(c("Importo Totale (€)", "Importo Medio (€)"), 0) %>%
+    formatRound(c("Aggiudicazione (%)", "Durata Prevista (gg)", "Scadenza-Esito (gg)", "Finestra Partecip. (gg)"), 1)
+})
+```
+
+
+Analisi di dettaglio mensile {data-icon="fa-calendar-alt"}
+=======================================================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Parametri di Analisi
+
+```{r}
+selectInput("anno_det", "1. Anno:",
+            choices = sort(unique(df_anac_raw$fil_val), decreasing = TRUE))
+selectInput("mese_det", "2. Mese:", choices = sprintf("%02d", 1:12))
+selectInput("fg_det", "3. Forma Giuridica:",
+            choices = c("Tutte le Forme" = "TUTTE", lista_fg))
+```
+
+```{r}
+data_mensile <- reactive({
+  req(input$anno_det, input$mese_det, input$fg_det)
+  is_fg <- input$fg_det != "TUTTE"
+  offset <- if (is_fg) 22 else 0
+  d <- df_anac_raw %>% filter(fil_val == input$anno_det, sub_fil_val == input$mese_det)
+  if (is_fg) d <- d %>% filter(subsub_fil_val == input$fg_det)
+  list(df = d, offset = offset)
+})
+
+get_det_ind <- function(base_id) {
+  info <- data_mensile()
+  target_id <- paste0("ind", base_id + info$offset)
+  info$df %>% filter(ind == target_id) %>% pull(ind_val) %>% sum(na.rm = TRUE)
+}
+
+helpText(
+  HTML(
+    "<div style='font-size: 12px; color: #666; line-height: 1.5;'>",
+    "<strong>Fonte:</strong> ANAC<br>",
+    "<strong>Annualità:</strong> 2023",
+    "</div>"
+  )
+)
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Gare nel Mese {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(format(get_det_ind(21), big.mark = ".", decimal.mark = ","),
+           icon = "fa-list-ol", color = "primary")
+})
+```
+
+### Aggiudicate nel Mese {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(format(get_det_ind(22), big.mark = ".", decimal.mark = ","),
+           icon = "fa-check-double", color = "success")
+})
+```
+
+### Importo Totale Mese {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(paste0("€ ", format(get_det_ind(26), big.mark = ".", decimal.mark = ",")),
+           icon = "fa-euro-sign", color = "warning")
+})
+```
+
+Row {data-height=400}
+-----------------------------------------------------------------------
+
+### Performance Temporale (GG)
+
+```{r}
+renderPlotly({
+  labels <- c("Durata prevista", "Durata scadenza-esito", "Durata finestra di partecipazione")
+  vals   <- c(get_det_ind(29), get_det_ind(30), get_det_ind(31))
+  
+  df_plot <- data.frame(
+    labels = factor(labels, levels = labels),
+    vals = vals
+  )
+
+  p <- ggplot(df_plot, aes(x = labels, y = vals, fill = labels)) +
+    geom_col(width = 0.6) +
+    scale_fill_manual(
+      values = c(
+        "Durata prevista"   = "#5DADE2",  
+        "Durata scadenza-esito"    = "#8FA85F",  
+        "Durata finestra di partecipazione" = "#F39C12"    
+      )
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      axis.text.x = element_text(size = 8),
+      axis.text.y = element_text(size = 10)
+    ) +
+    labs(x = NULL, y = "Giorni")
+
+  ggplotly(p)
+})
+```
+
+### Medie economiche per Ente
+
+```{r}
+renderPlotly({
+  labels <- c("Media importo di lotto", "Media ponderata con durata prevista")
+  vals   <- c(get_det_ind(27), get_det_ind(28))
+  
+  df_plot <- data.frame(
+    labels = factor(labels, levels = labels),
+    vals = vals
+  )
+
+  p <- ggplot(df_plot, aes(x = labels, y = vals, fill = labels)) +
+    geom_col(width = 0.6) +
+    scale_fill_manual(
+      values = c(
+        "Media importo di lotto"              = "#5DADE2",   
+        "Media ponderata con durata prevista"   = "#F39C12"    
+      )
+    ) +
+    scale_y_continuous(
+      labels = function(x) {
+        ifelse(x >= 1e9,
+               paste0(format(x/1e9, big.mark=".", decimal.mark=",", digits=2), " miliardi"),
+        ifelse(x >= 1e6,
+               paste0(format(x/1e6, big.mark=".", decimal.mark=",", digits=1), " milioni"),
+               paste0("€ ", format(x, big.mark=".", decimal.mark=","))))
+      }
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      axis.text.x = element_text(size = 11),
+      axis.text.y = element_text(size = 10)
+    ) +
+    labs(x = NULL, y = "Importo")
+
+  ggplotly(p)
+})
+```
+
+Analisi per Settore CPV {data-icon="fa-industry"}
+=======================================================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Filtri Settore
+
+```{r}
+selectInput("cpv_sel",  "1. Scegli Settore (CPV):", choices = lista_cpv)
+selectInput("anno_cpv", "2. Anno:",
+            choices = sort(unique(df_cpv_raw$fil_val), decreasing = TRUE))
+selectInput("mese_cpv", "3. Mese:",
+            choices = c("Tutti i mesi" = "TUTTI", sprintf("%02d", 1:12)))
+selectInput("fg_cpv",   "4. Forma Giuridica:",
+            choices = c("Tutte le PA" = "TUTTE", lista_fg_cpv))
+
+helpText(
+  HTML(
+    "<div style='font-size: 12px; color: #666; line-height: 1.5;'>",
+    "<strong>Fonte:</strong> ANAC<br>",
+    "<strong>Annualità:</strong> 2023",
+    "</div>"
+  )
+)
+```
+
+```{r}
+dati_cpv <- reactive({
+  req(input$cpv_sel, input$anno_cpv, input$mese_cpv, input$fg_cpv)
+  is_tutti_mesi  <- input$mese_cpv == "TUTTI"
+  is_tutte_forme <- input$fg_cpv   == "TUTTE"
+  base_id <- case_when(
+    is_tutti_mesi &  is_tutte_forme ~ 1,
+    !is_tutti_mesi & is_tutte_forme ~ 13,
+    is_tutti_mesi & !is_tutte_forme ~ 25,
+    TRUE                            ~ 37
+  )
+  d <- df_cpv_raw %>% filter(cpv == input$cpv_sel, fil_val == input$anno_cpv)
+  if (!is_tutti_mesi) d <- d %>% filter(sub_fil_val == input$mese_cpv)
+  if (!is_tutte_forme) {
+    col_fg <- if (is_tutti_mesi) "sub_fil_val" else "subsub_fil_val"
+    d <- d %>% filter(!!sym(col_fg) == input$fg_cpv)
+  }
+  indices <- paste0("ind", base_id:(base_id + 11))
+  res <- setNames(
+    lapply(indices, function(i) sum(d$ind_val[d$ind == i], na.rm = TRUE)),
+    c("gare","agg_n","agg_perc","pa_n","pa_perc","media_gare_pa",
+      "imp_tot","imp_med","imp_pond","durata","esito","finestra")
+  )
+  list(res = res, base_id = base_id)
+})
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Numero di gare nel settore {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(format(dati_cpv()$res$gare, big.mark = ".", decimal.mark = ","),
+           icon = "fa-shopping-cart", color = "primary")
+})
+```
+
+### Gare aggiudicate nel settore (%) {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(paste0(format(dati_cpv()$res$agg_perc, nsmall = 2), "%"),
+           icon = "fa-chart-pie", color = "success")
+})
+```
+
+### Importo di lotto totale nel settore {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(paste0("€ ", format(dati_cpv()$res$imp_tot, big.mark = ".", decimal.mark = ",")),
+           icon = "fa-euro-sign", color = "warning")
+})
+```
+
+Row
+-----------------------------------------------------------------------
+
+
+### Performance temporale nel settore (gg)
+
+```{r}
+renderPlotly({
+  d <- dati_cpv()$res
+  df_p <- data.frame(
+    Label  = factor(c("Durata prevista", "Durata scadenza-esito", "Durata finestra di partecipazione"), levels = c("Durata prevista", "Durata scadenza-esito", "Durata finestra di partecipazione")),
+    Valore = c(d$durata, d$esito, d$finestra)
+  )
+  
+  p <- ggplot(df_p, aes(x = Label, y = Valore, fill = Label)) +
+    geom_col(width = 0.6) +
+    scale_fill_manual(
+      values = c(
+        "Durata prevista"   = "#5DADE2",  
+        "Durata scadenza-esito"    = "#8FA85F",  
+        "Durata finestra di partecipazione" = "#F39C12"    
+      )
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      axis.text.x = element_text(size = 8),
+      axis.text.y = element_text(size = 10)
+    ) +
+    labs(x = NULL, y = "Giorni")
+
+  ggplotly(p)
+})
+```
+
+### Rapporto Gare/PA nel Settore
+
+```{r}
+renderPlotly({
+  d <- dati_cpv()$res
+  df_p <- data.frame(
+    Label  = c("Media Gare/PA", "PA"),
+    Valore = c(d$media_gare_pa, d$pa_n)
+  )
+  p <- ggplot(df_p, aes(x = Label, y = Valore)) +
+    geom_col(fill = "#F39C12") +
+    theme_minimal() +
+    theme(
+      axis.ticks.x = element_blank()    
+    ) +
+    labs(x = NULL, y = NULL)             
+
+  ggplotly(p)
+})
+```
+
+
+Row {data-height=400}
+-----------------------------------------------------------------------
+### Confronto tra tutti i Settori
+
+```{r}
+renderDT({
+  req(input$anno_cpv, input$mese_cpv, input$fg_cpv)
+  is_tutti_mesi  <- input$mese_cpv == "TUTTI"
+  is_tutte_forme <- input$fg_cpv   == "TUTTE"
+  base_id <- case_when(
+    is_tutti_mesi &  is_tutte_forme ~ 1,
+    !is_tutti_mesi & is_tutte_forme ~ 13,
+    is_tutti_mesi & !is_tutte_forme ~ 25,
+    TRUE                            ~ 37
+  )
+  d <- df_cpv_raw %>% filter(fil_val == input$anno_cpv)
+  if (!is_tutti_mesi) d <- d %>% filter(sub_fil_val == input$mese_cpv)
+  if (!is_tutte_forme) {
+    col_fg <- if (is_tutti_mesi) "sub_fil_val" else "subsub_fil_val"
+    d <- d %>% filter(!!sym(col_fg) == input$fg_cpv)
+  }
+  idx <- c(gare = base_id, agg_n = base_id+1, agg_perc = base_id+2,
+            pa_n = base_id+3, imp_tot = base_id+6)
+  mappa_idx <- setNames(paste0("ind", idx), names(idx))
+  tab <- d %>%
+    filter(ind %in% mappa_idx) %>%
+    mutate(metrica = names(mappa_idx)[match(ind, mappa_idx)]) %>%
+    group_by(cpv, metrica) %>%
+    summarise(valore = sum(ind_val, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(names_from = metrica, values_from = valore) %>%
+    arrange(desc(imp_tot))
+
+  datatable(
+    tab,
+    rownames = FALSE,
+    colnames = c(
+      "Settore (CPV)" = "cpv", "N. Gare" = "gare", "Aggiudicate (n)" = "agg_n",
+      "Aggiudicate (%)" = "agg_perc", "N. PA acquirenti" = "pa_n",
+      "Importo Totale (€)" = "imp_tot"
+    ),
+    filter = "top",
+    extensions = c("Buttons"),
+    options = list(
+      pageLength = 15,
+      order = list(list(5, "desc")),
+      dom = 'Bfrtip',
+      buttons = list(
+        list(extend = 'excel', text = 'Excel', filename = 'ANAC_Confronto_Settori_CPV'),
+        list(extend = 'csv', text = 'CSV', filename = 'ANAC_Confronto_Settori_CPV'),
+        list(extend = 'pdf', text = 'PDF', filename = 'ANAC_Confronto_Settori_CPV'),
+        list(extend = 'print', text = 'Stampa')
+      )
+    )
+  ) %>%
+    formatRound("Importo Totale (€)", 0) %>%
+    formatRound("Aggiudicate (%)", 1)
+})
+```
+
+

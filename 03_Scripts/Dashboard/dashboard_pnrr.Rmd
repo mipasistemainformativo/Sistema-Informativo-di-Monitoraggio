@@ -1,0 +1,952 @@
+---
+title: "Sistema Integrato di Monitoraggio"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: scroll
+    theme: flatly
+    css: styles.css
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+ packages <- c(
+   "dplyr", "tidyr", "stringr", "readr", "ggplot2", "plotly",
+   "DT", "htmltools", "tibble", "googledrive",
+  "shiny", "purrr",
+   "flexdashboard","scales"
+ )
+
+ missing_packages <- packages[!packages %in% installed.packages()[, "Package"]]
+ if (length(missing_packages) > 0) install.packages(missing_packages)
+ invisible(lapply(packages, library, character.only = TRUE))
+ 
+
+if (exists("SIM_DRIVE_EMAIL")) {
+  googledrive::drive_auth(
+    email = SIM_DRIVE_EMAIL,
+    scopes = "https://www.googleapis.com/auth/drive"
+  )
+} else {
+  googledrive::drive_auth(scopes = "https://www.googleapis.com/auth/drive")
+}
+
+find_project_root <- function(start = getwd()) {
+  path <- normalizePath(start, mustWork = TRUE)
+
+  repeat {
+    if (file.exists(file.path(path, "03_Scripts", "00_config.R"))) {
+      return(path)
+    }
+
+    parent <- dirname(path)
+
+    if (parent == path) {
+      stop("Root del progetto non trovata.")
+    }
+
+    path <- parent
+  }
+}
+
+PROJECT_ROOT <- find_project_root()
+
+source(file.path(PROJECT_ROOT, "03_Scripts", "00_config.R"))
+source(file.path(PROJECT_ROOT, "03_Scripts", "00_sim_helpers.R"))
+
+
+# Funzione scarica .rds
+drive_latest_file <- function(drive_path, pattern) {
+  dir_drive <- sim_drive_ls_path(drive_path, create = FALSE)
+  
+  file <- googledrive::drive_ls(dir_drive) %>%
+    dplyr::filter(
+      stringr::str_detect(
+        .data$name,
+        stringr::regex(pattern, ignore_case = TRUE)
+      )
+    ) %>%
+    dplyr::arrange(dplyr::desc(.data$name)) %>%
+    dplyr::slice(1)
+  
+  if (nrow(file) == 0) {
+    stop("Nessun file trovato in ", drive_path, " con pattern: ", pattern)
+  }
+  
+  file
+}
+
+read_latest_rds <- function(drive_path, pattern) {
+  file <- drive_latest_file(drive_path, pattern)
+  local_file <- sim_drive_download_to_temp(file, local_name = file$name[1], overwrite = TRUE)
+  obj <- readRDS(local_file)
+  unlink(local_file)
+  message("File letto da Drive: ", file$name[1])
+  obj
+}
+
+# Funzione scarica .json
+read_latest_json <- function(drive_path, pattern) {
+  
+  file <- drive_latest_file(
+    drive_path = drive_path,
+    pattern = pattern
+  )
+  
+  local_file <- sim_drive_download_to_temp(
+    file,
+    local_name = file$name[1],
+    overwrite = TRUE
+  )
+  
+  obj <- jsonlite::fromJSON(
+    local_file,
+    simplifyDataFrame = TRUE
+  )
+  
+  unlink(local_file)
+  
+  message(
+    "File letto da Drive: ",
+    file$name[1]
+  )
+  
+  obj
+  
+}
+
+# esempio uso
+# master_ca <- read_latest_json(
+#   drive_path = file.path(DRIVE_DIR_PROCESSED, "Nome_cartella_fonte"),
+#   pattern = "^dataset_nomefonte_.*\\.json$"
+# )
+```
+
+
+```{r, include=FALSE}
+# Scarico file in temp
+master_ca <- read_latest_rds(
+    drive_path = file.path(DRIVE_DIR_PROCESSED, "Conto_annuale"),
+    pattern    = "^master_CA_multianno_.*\\.rds$")
+
+raw = master_ca
+#raw = readRDS(params$data_path)
+```
+
+
+```{r, include=FALSE}
+# --- Universo PA da monitorare -----------------------------------------------
+d <- raw %>% filter(presente_mpa == 1)
+
+# --- Correzioni di qualita' dati documentate ----------------------------------
+# ETA_MEDIA_PA risulta moltiplicata per 10 (mediana 507 vs attesa ~50.7)
+# INCIDENZA_SPESA_FORMAZIONE_PERC: pochi casi negativi (TOTALE_SPESA < 0 in
+# alcune Unioni di Comuni) -> floor a 0, <0.1% righe
+d <- d %>%
+  mutate(
+    ETA_MEDIA_PA = ETA_MEDIA_PA / 10,
+    INCIDENZA_SPESA_FORMAZIONE_PERC = if_else(
+      INCIDENZA_SPESA_FORMAZIONE_PERC < 0, 0, INCIDENZA_SPESA_FORMAZIONE_PERC)
+  )
+
+# --- Dimensioni classificazione ----------------------------------------------
+d <- d %>%
+  mutate(
+    regione         = str_to_title(regione_bdap,                  locale = "it"),
+    tipologia_amm   = str_to_title(descr_tipologia_istat_s13_bdap, locale = "it"),
+    forma_giuridica = desc_fg,
+    in_fonte_ca     = fonte_conto_annuale == 1
+  )
+
+# --- Indicatori derivati -----------------------------------------------------
+d <- d %>%
+  mutate(
+    tasso_assunzione = if_else(PERSONALE_TOT > 0, ASSUN_TOT / PERSONALE_TOT * 100, NA_real_),
+    tasso_cessazione = if_else(PERSONALE_TOT > 0, CESS_TOT / PERSONALE_TOT * 100, NA_real_),
+    saldo            = ASSUN_TOT - CESS_TOT,
+    tasso_turnover   = if_else(PERSONALE_TOT > 0, (ASSUN_TOT + CESS_TOT) / PERSONALE_TOT * 100, NA_real_),
+    fascia_35_54     = PERSONALE_TOT_ETA - UNDER35 - OVER55   # OVER55 cumulativo (include OVER65)
+  ) %>%
+  arrange(codice_fiscale, anno) %>%
+  group_by(codice_fiscale) %>%
+  mutate(
+    personale_tot_prec = lag(PERSONALE_TOT, order_by = anno),
+    tasso_crescita = if_else(
+      !is.na(personale_tot_prec) & personale_tot_prec > 0,
+      (PERSONALE_TOT - personale_tot_prec) / personale_tot_prec * 100, NA_real_)
+  ) %>%
+  ungroup()
+
+ultimo_anno  <- max(d$anno, na.rm = TRUE)
+anni_disp    <- sort(unique(d$anno))
+d_coperti    <- d %>% filter(in_fonte_ca)
+d_ultimo     <- d %>% filter(anno == ultimo_anno)
+d_cop_ultimo <- d_coperti %>% filter(anno == ultimo_anno)
+
+# =============================================================================
+# 2. PALETTE E HELPERS
+# =============================================================================
+
+# Palette colori
+col_blu       <- "#2C6E9B"
+col_verde     <- "#3F9C6D"
+col_arancio   <- "#D98832"
+col_neutro    <- "#5B6B79"
+col_warn      <- "#C0504D"
+col_viola     <- "#8E5B9F"
+
+pal_categ <- c(col_blu, col_verde, col_arancio, col_viola, col_warn,
+               "#4FA3A8", "#A3A847", "#B0739A", "#6E7B8B", "#D9B23C",
+               "#5C8A8A", "#B5651D")
+
+# Formattatori numerici 
+fmt_n   <- scales::label_number(big.mark = ".", decimal.mark = ",", accuracy = 1)
+fmt_pct <- scales::label_number(big.mark = ".", decimal.mark = ",", accuracy = 0.1, suffix = "%")
+fmt_eur <- scales::label_number(big.mark = ".", decimal.mark = ",", accuracy = 1, prefix = "\u20ac")
+fmt_1d  <- scales::label_number(big.mark = ".", decimal.mark = ",", accuracy = 0.1)
+
+
+# Funzione serve ai grafici Ploty per evitare scrivere sempre
+# plot_ly(...) %>%
+#   layout(...) %>%
+#   config(...)
+# adesso scrivi:
+# plot_ly(...) %>%
+#   playout()
+# e tutti i grafici avranno:
+# stesso font
+# stessi margini
+# stesso sfondo
+# menu Plotly nascosto
+# lingua italiana
+
+playout <- function(p, ...) {
+  p %>%
+    layout(font = list(family = "Lato, Helvetica, Arial, sans-serif", size = 12, color = "#3C3C3C"),
+           paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "rgba(0,0,0,0)",
+           margin = list(t = 35, r = 20, l = 55, b = 50), ...) %>%
+    config(displayModeBar = FALSE, locale = "it")
+}
+
+# Toglie informazioni indesiderati delle tabelle DT::datatable().
+# Senza questo vedresti:
+# Search
+# Previous
+# Next
+# Showing 1 to 10 of 100 entries
+
+dt_lang <- list(search = "Cerca:", lengthMenu = "Mostra _MENU_ righe",
+                info = "Da _START_ a _END_ di _TOTAL_ righe",
+                infoEmpty = "0 righe", infoFiltered = "(filtrate da _MAX_)",
+                zeroRecords = "Nessun risultato",
+                paginate = list(previous = "Prec.", `next` = "Succ."),
+                emptyTable = "Nessun dato disponibile")
+
+# =============================================================================
+# 3. FUNZIONE DI AGGREGAZIONE (riusabile)
+# =============================================================================
+agg_indicatori <- function(df) {
+  df %>%
+    summarise(
+      n_pa              = n(),
+      personale_tot     = sum(PERSONALE_TOT, na.rm = TRUE),
+      eta_media         = sum(ETA_MEDIA_PA * PERSONALE_TOT, na.rm = TRUE) /
+                            sum(PERSONALE_TOT[!is.na(ETA_MEDIA_PA)], na.rm = TRUE),
+      quota_donne       = sum(PERSONALE_DONNE, na.rm = TRUE) /
+                            pmax(sum(PERSONALE_TOT, na.rm = TRUE), 1) * 100,
+      quota_under35     = sum(UNDER35, na.rm = TRUE) /
+                            pmax(sum(PERSONALE_TOT_ETA, na.rm = TRUE), 1) * 100,
+      quota_over55      = sum(OVER55, na.rm = TRUE) /
+                            pmax(sum(PERSONALE_TOT_ETA, na.rm = TRUE), 1) * 100,
+      indice_ricambio   = sum(UNDER35, na.rm = TRUE) /
+                            pmax(sum(OVER55, na.rm = TRUE), 1),
+      assunzioni_tot    = sum(ASSUN_TOT, na.rm = TRUE),
+      cessazioni_tot    = sum(CESS_TOT, na.rm = TRUE),
+      saldo_netto       = assunzioni_tot - cessazioni_tot,
+      tasso_assunzione  = assunzioni_tot / pmax(personale_tot, 1) * 100,
+      tasso_cessazione  = cessazioni_tot / pmax(personale_tot, 1) * 100,
+      quota_part_time   = sum(TOT_PART_TIME, na.rm = TRUE) /
+                            pmax(personale_tot, 1) * 100,
+      giorni_form       = sum(GIORNI_FORM_TOT, na.rm = TRUE) /
+                            pmax(personale_tot, 1),
+      spesa_form        = sum(SPESA_FORMAZIONE_L020, na.rm = TRUE) /
+                            pmax(personale_tot, 1),
+      incidenza_form    = sum(SPESA_FORMAZIONE_L020, na.rm = TRUE) /
+                            pmax(sum(TOTALE_SPESA[TOTALE_SPESA > 0], na.rm = TRUE), 1) * 100,
+      .groups = "drop"
+    )
+}
+
+agg_naz    <- d_coperti %>% group_by(anno) %>% agg_indicatori()
+kpi_last   <- agg_naz %>% filter(anno == ultimo_anno)
+kpi_prev   <- agg_naz %>% filter(anno == ultimo_anno - 1)
+
+delta <- function(var, digits = 1) {
+  if (nrow(kpi_prev) == 0 || is.na(kpi_prev[[var]])) return("n.d.")
+  dv <- kpi_last[[var]] - kpi_prev[[var]]
+  paste0(if (dv >= 0) "+" else "", round(dv, digits))
+}
+```
+
+<!-- ========================================================================
+     PAGINA 1 – PA MONITORATE
+     ======================================================================== -->
+
+PA Monitorate
+==============================================================================
+
+Row
+------------------------------------------------------------------------------
+
+### PA universo {.value-box}
+```{r}
+n_uni  <- nrow(d_ultimo)
+n_cop  <- nrow(d_cop_ultimo)
+p_cop  <- n_cop / n_uni * 100
+cop_naz <- d %>% group_by(anno) %>%
+  summarise(n_uni = n(), n_cop = sum(in_fonte_ca),
+            pct = n_cop / n_uni * 100, .groups = "drop")
+p_prec <- cop_naz$pct[cop_naz$anno == ultimo_anno - 1]
+delta_cop <- if (length(p_prec) == 1) p_cop - p_prec else NA_real_
+
+valueBox(fmt_n(n_uni),
+  caption = paste("PA da monitorare -", ultimo_anno),
+  icon = "fa-building", color = col_neutro)
+```
+
+### PA coperte {.value-box}
+```{r}
+valueBox(fmt_n(n_cop),
+  caption = paste("PA con dato Conto Annuale -", ultimo_anno),
+  icon = "fa-check-circle", color = col_verde)
+```
+
+### Copertura % {.value-box}
+```{r}
+col_cop <- if (p_cop >= 90) col_verde else if (p_cop >= 75) col_arancio else col_warn
+valueBox(fmt_pct(p_cop), caption = "% Copertura Conto Annuale",
+         icon = "fa-percentage", color = col_cop)
+```
+
+### Variazione copertura {.value-box}
+```{r}
+if (!is.na(delta_cop)) {
+  col_d <- if (delta_cop >= 0) col_verde else col_warn
+  ic    <- if (delta_cop >= 0) "fa-arrow-up" else "fa-arrow-down"
+  lbl   <- paste0(if (delta_cop >= 0) "+" else "", fmt_1d(delta_cop), " p.p. vs ", ultimo_anno - 1)
+  valueBox(lbl, caption = "Variazione copertura", icon = ic, color = col_d)
+} else {
+  valueBox("n.d.", caption = "Variazione copertura", icon = "fa-minus", color = col_neutro)
+}
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Copertura Conto Annuale nel tempo
+```{r}
+plot_ly(cop_naz, x = ~factor(anno), y = ~pct, type = "bar",
+        marker = list(color = col_blu),
+        text  = ~paste0(fmt_pct(pct), "<br>(", fmt_n(n_cop), " / ", fmt_n(n_uni), " PA)"),
+        textposition = "outside", hoverinfo = "text") %>%
+  playout(yaxis = list(title = "% copertura", range = c(0, 107)),
+          xaxis = list(title = ""))
+```
+
+### Copertura per Regione
+```{r}
+cop_reg <- d_ultimo %>%
+  filter(!is.na(regione)) %>%
+  group_by(regione) %>%
+  summarise(n_uni = n(), n_cop = sum(in_fonte_ca),
+            pct = n_cop / n_uni * 100, .groups = "drop") %>%
+  arrange(pct)
+
+plot_ly(cop_reg,
+        y = ~factor(regione, levels = regione), x = ~pct,
+        type = "bar", orientation = "h",
+        marker = list(color = ~pct,
+          colorscale = list(c(0, col_warn), c(1, col_verde)), cmin = 0, cmax = 100),
+        text  = ~paste0(fmt_pct(pct), " (", fmt_n(n_cop), "/", fmt_n(n_uni), ")"),
+        textposition = "outside", hoverinfo = "text") %>%
+  playout(xaxis = list(title = "% copertura", range = c(0, 117)),
+          yaxis = list(title = ""), margin = list(l = 170, t = 35, r = 20, b = 50))
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Copertura per Tipologia amministrativa (top 15 per numerosita')
+```{r}
+cop_tip <- d_ultimo %>%
+  filter(!is.na(tipologia_amm)) %>%
+  group_by(tipologia_amm) %>%
+  summarise(n_uni = n(), n_cop = sum(in_fonte_ca),
+            pct = n_cop / n_uni * 100, .groups = "drop") %>%
+  arrange(desc(n_uni)) %>% slice_head(n = 15) %>% arrange(pct) %>%
+  mutate(label = str_trunc(tipologia_amm, 55, side = "right"))
+
+plot_ly(cop_tip,
+        y = ~factor(label, levels = label), x = ~pct, type = "bar", orientation = "h",
+        marker = list(color = ~pct,
+          colorscale = list(c(0, col_warn), c(1, col_verde)), cmin = 0, cmax = 100),
+        text = ~paste0(fmt_pct(pct)),
+        textposition = "outside",
+        hovertext = ~paste0(tipologia_amm, ": ", fmt_pct(pct),
+                            " (", fmt_n(n_cop), "/", fmt_n(n_uni), ")"),
+        hoverinfo = "text") %>%
+  playout(xaxis = list(title = "% copertura", range = c(0, 115)),
+          yaxis = list(title = ""), margin = list(l = 310, t = 35, r = 20, b = 50))
+```
+
+### Copertura per Forma giuridica (top 15 per numerosita')
+```{r}
+cop_fg <- d_ultimo %>%
+  filter(!is.na(forma_giuridica)) %>%
+  group_by(forma_giuridica) %>%
+  summarise(n_uni = n(), n_cop = sum(in_fonte_ca),
+            pct = n_cop / n_uni * 100, .groups = "drop") %>%
+  arrange(desc(n_uni)) %>% slice_head(n = 15) %>% arrange(pct)
+
+plot_ly(cop_fg,
+        y = ~factor(forma_giuridica, levels = forma_giuridica), x = ~pct,
+        type = "bar", orientation = "h",
+        marker = list(color = ~pct,
+          colorscale = list(c(0, col_warn), c(1, col_verde)), cmin = 0, cmax = 100),
+        text = ~paste0(fmt_pct(pct)),
+        textposition = "outside",
+        hovertext = ~paste0(forma_giuridica, ": ", fmt_pct(pct),
+                            " (", fmt_n(n_cop), "/", fmt_n(n_uni), ")"),
+        hoverinfo = "text") %>%
+  playout(xaxis = list(title = "% copertura", range = c(0, 115)),
+          yaxis = list(title = ""), margin = list(l = 250, t = 35, r = 20, b = 50))
+```
+
+Row
+------------------------------------------------------------------------------
+
+<!-- ### PA non coperte da Conto Annuale - dettaglio `r ultimo_anno` {data-height=450} -->
+<!-- ```{r} -->
+<!-- d_ultimo %>% -->
+<!--   filter(!in_fonte_ca) %>% -->
+<!--   select(Ragione_sociale = ragione_sociale, Regione = regione, -->
+<!--          Tipologia_amm = tipologia_amm, Forma_giuridica = forma_giuridica) %>% -->
+<!--   arrange(Regione, Ragione_sociale) %>% -->
+<!--   datatable(rownames = FALSE, -->
+<!--             options = list(pageLength = 10, language = dt_lang, scrollX = TRUE)) -->
+<!-- ``` -->
+
+<!-- ========================================================================
+     PAGINA 2 – OVERVIEW NAZIONALE
+     ======================================================================== -->
+
+Overview Nazionale
+==============================================================================
+
+Row
+------------------------------------------------------------------------------
+
+### Personale totale {.value-box}
+```{r}
+valueBox(fmt_n(kpi_last$personale_tot),
+  caption = paste("Personale totale -", ultimo_anno),
+  icon = "fa-users", color = col_blu)
+```
+
+### Eta' media {.value-box}
+```{r}
+valueBox(fmt_1d(kpi_last$eta_media),
+  caption = paste0("Eta' media (anni) - ", ultimo_anno,
+                   "  [", delta("eta_media"), " vs ", ultimo_anno-1, "]"),
+  icon = "fa-birthday-cake", color = col_neutro)
+```
+
+### Under 35 {.value-box}
+```{r}
+valueBox(fmt_pct(kpi_last$quota_under35),
+  caption = paste0("Quota under 35 - ", ultimo_anno,
+                   "  [", delta("quota_under35"), " p.p.]"),
+  icon = "fa-user-plus",
+  color = if (kpi_last$quota_under35 < 15) col_warn else col_verde)
+```
+
+### Over 55 {.value-box}
+```{r}
+valueBox(fmt_pct(kpi_last$quota_over55),
+  caption = paste0("Quota over 55 - ", ultimo_anno,
+                   "  [", delta("quota_over55"), " p.p.]"),
+  icon = "fa-user-clock",
+  color = if (kpi_last$quota_over55 > 40) col_warn else col_neutro)
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Assunzioni totali {.value-box}
+```{r}
+valueBox(fmt_n(kpi_last$assunzioni_tot),
+  caption = paste("Assunzioni totali -", ultimo_anno),
+  icon = "fa-sign-in-alt", color = col_verde)
+```
+
+### Cessazioni totali {.value-box}
+```{r}
+valueBox(fmt_n(kpi_last$cessazioni_tot),
+  caption = paste("Cessazioni totali -", ultimo_anno),
+  icon = "fa-sign-out-alt", color = col_arancio)
+```
+
+### Saldo netto {.value-box}
+```{r}
+saldo_v <- kpi_last$saldo_netto
+valueBox(
+  paste0(if (saldo_v >= 0) "+" else "", fmt_n(saldo_v)),
+  caption = paste("Saldo (assunzioni - cessazioni) -", ultimo_anno),
+  icon = if (saldo_v >= 0) "fa-arrow-up" else "fa-arrow-down",
+  color = if (saldo_v >= 0) col_verde else col_warn)
+```
+
+### Indice ricambio generazionale {.value-box}
+```{r}
+irc <- kpi_last$indice_ricambio
+valueBox(fmt_1d(irc),
+  caption = paste0("Indice ricambio generazionale (under35/over55) - ", ultimo_anno),
+  icon = "fa-exchange-alt",
+  color = if (irc >= 1) col_verde else if (irc >= 0.5) col_arancio else col_warn)
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Struttura eta' per fascia d'eta' (anno `r ultimo_anno`)
+```{r}
+eta_serie <- d_coperti %>%
+  group_by(anno) %>%
+  summarise(
+    under35 = sum(UNDER35, na.rm = TRUE) / pmax(sum(PERSONALE_TOT_ETA, na.rm = TRUE),1) * 100,
+    eta35_54 = (sum(PERSONALE_TOT_ETA, na.rm = TRUE) - sum(UNDER35, na.rm=TRUE) - sum(OVER55, na.rm=TRUE)) /
+                 pmax(sum(PERSONALE_TOT_ETA, na.rm = TRUE),1) * 100,
+    over55  = sum(OVER55,   na.rm = TRUE) / pmax(sum(PERSONALE_TOT_ETA, na.rm = TRUE),1) * 100,
+    .groups = "drop")
+
+plot_ly(eta_serie, x = ~factor(anno), y = ~under35,  name = "Under 35",
+        type = "bar", marker = list(color = col_verde)) %>%
+  add_trace(y = ~eta35_54, name = "35-54",  marker = list(color = col_blu)) %>%
+  add_trace(y = ~over55,   name = "Over 55", marker = list(color = col_warn)) %>%
+  playout(barmode = "stack",
+          yaxis = list(title = "% sul totale", ticksuffix = "%"),
+          xaxis = list(title = ""), legend = list(orientation = "h", y = -0.15))
+```
+
+### Dinamica personale - Tassi (%) per anno
+```{r}
+din_serie <- d_coperti %>%
+  group_by(anno) %>%
+  summarise(
+    tasso_ass = sum(ASSUN_TOT, na.rm = TRUE) / pmax(sum(PERSONALE_TOT, na.rm = TRUE),1) * 100,
+    tasso_ces = sum(CESS_TOT,  na.rm = TRUE) / pmax(sum(PERSONALE_TOT, na.rm = TRUE),1) * 100,
+    .groups = "drop")
+
+plot_ly(din_serie, x = ~factor(anno), y = ~tasso_ass, name = "Tasso assunzione",
+        type = "scatter", mode = "lines+markers",
+        line = list(color = col_verde, width = 2), marker = list(size = 8)) %>%
+  add_trace(y = ~tasso_ces, name = "Tasso cessazione",
+            line = list(color = col_warn, width = 2), marker = list(size = 8)) %>%
+  playout(yaxis = list(title = "% sul personale", ticksuffix = "%"),
+          xaxis = list(title = ""), legend = list(orientation = "h", y = -0.15))
+```
+
+<!-- ========================================================================
+     PAGINA 3 – COMPOSIZIONE PERSONALE
+     ======================================================================== -->
+
+Composizione Personale
+==============================================================================
+
+Row
+------------------------------------------------------------------------------
+
+### Quota donne {.value-box}
+```{r}
+valueBox(fmt_pct(kpi_last$quota_donne),
+  caption = paste("Quota donne -", ultimo_anno),
+  icon = "fa-female", color = col_viola)
+```
+
+### % Part-time {.value-box}
+```{r}
+valueBox(fmt_pct(kpi_last$quota_part_time),
+  caption = paste("% Part-time -", ultimo_anno),
+  icon = "fa-clock", color = col_neutro)
+```
+
+### Eta' media {.value-box}
+```{r}
+valueBox(fmt_1d(kpi_last$eta_media),
+  caption = paste("Eta' media pesata -", ultimo_anno),
+  icon = "fa-calendar", color = col_neutro)
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Distribuzione eta' media per Regione (`r ultimo_anno`)
+```{r}
+eta_reg <- d_cop_ultimo %>%
+  filter(!is.na(regione)) %>%
+  group_by(regione) %>%
+  summarise(
+    eta = sum(ETA_MEDIA_PA * PERSONALE_TOT, na.rm = TRUE) /
+          pmax(sum(PERSONALE_TOT[!is.na(ETA_MEDIA_PA)], na.rm = TRUE),1),
+    .groups = "drop") %>%
+  arrange(eta)
+
+plot_ly(eta_reg,
+        y = ~factor(regione, levels = regione), x = ~eta,
+        type = "bar", orientation = "h",
+        marker = list(color = ~eta,
+          colorscale = list(c(0, col_verde), c(1, col_warn)),
+          cmin = min(eta_reg$eta), cmax = max(eta_reg$eta)),
+        text = ~fmt_1d(eta), textposition = "outside",
+        hovertext = ~paste0(regione, ": eta' media = ", fmt_1d(eta)),
+        hoverinfo = "text") %>%
+  playout(xaxis = list(title = "Eta' media (anni)"),
+          yaxis = list(title = ""), margin = list(l = 160, t = 35, r = 20, b = 50))
+```
+
+### Distribuzione eta' media per Forma giuridica (`r ultimo_anno`)
+```{r}
+eta_fg <- d_cop_ultimo %>%
+  filter(!is.na(forma_giuridica)) %>%
+  group_by(forma_giuridica) %>%
+  summarise(
+    eta  = sum(ETA_MEDIA_PA * PERSONALE_TOT, na.rm = TRUE) /
+           pmax(sum(PERSONALE_TOT[!is.na(ETA_MEDIA_PA)], na.rm = TRUE),1),
+    n_pa = n(), .groups = "drop") %>%
+  filter(n_pa >= 5) %>%
+  arrange(eta) %>%
+  mutate(label = str_trunc(forma_giuridica, 45, side = "right"))
+
+plot_ly(eta_fg,
+        y = ~factor(label, levels = label), x = ~eta,
+        type = "bar", orientation = "h",
+        marker = list(color = ~eta,
+          colorscale = list(c(0, col_verde), c(1, col_warn)),
+          cmin = min(eta_fg$eta), cmax = max(eta_fg$eta)),
+        text = ~fmt_1d(eta), textposition = "outside",
+        hovertext = ~paste0(forma_giuridica, ": eta' media = ", fmt_1d(eta),
+                            " (", fmt_n(n_pa), " PA)"),
+        hoverinfo = "text") %>%
+  playout(xaxis = list(title = "Eta' media (anni)"),
+          yaxis = list(title = ""), margin = list(l = 260, t = 35, r = 20, b = 50))
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Quota under 35 e over 55 per Tipologia amministrativa (`r ultimo_anno`)
+```{r}
+fascia_tip <- d_cop_ultimo %>%
+  filter(!is.na(tipologia_amm)) %>%
+  group_by(tipologia_amm) %>%
+  summarise(
+    under35 = sum(UNDER35, na.rm=TRUE) / pmax(sum(PERSONALE_TOT_ETA, na.rm=TRUE),1) * 100,
+    over55  = sum(OVER55,  na.rm=TRUE) / pmax(sum(PERSONALE_TOT_ETA, na.rm=TRUE),1) * 100,
+    n_pa = n(), .groups = "drop") %>%
+  filter(n_pa >= 3) %>%
+  mutate(label = str_trunc(tipologia_amm, 50, side = "right")) %>%
+  arrange(under35)
+
+plot_ly(fascia_tip,
+        y = ~factor(label, levels = label), x = ~under35, name = "Under 35",
+        type = "bar", orientation = "h",
+        marker = list(color = col_verde)) %>%
+  add_trace(x = ~-over55, name = "Over 55", marker = list(color = col_warn)) %>%
+  playout(barmode = "overlay",
+          xaxis = list(title = "% sul totale",
+            tickvals = seq(-60, 50, by = 10),
+            ticktext = paste0(abs(seq(-60, 50, by = 10)), "%")),
+          yaxis = list(title = ""),
+          legend = list(orientation = "h", y = -0.1),
+          margin = list(l = 310, t = 35, r = 20, b = 60),
+          shapes = list(list(type = "line", x0 = 0, x1 = 0,
+                             y0 = 0, y1 = 1, yref = "paper",
+                             line = list(color = "#666", width = 1, dash = "dot"))))
+```
+
+<!-- ========================================================================
+     PAGINA 4 – FORMAZIONE E SPESA
+     ======================================================================== -->
+
+Formazione e Spesa
+==============================================================================
+
+Row
+------------------------------------------------------------------------------
+
+### Giorni formazione / dip. {.value-box}
+```{r}
+valueBox(fmt_1d(kpi_last$giorni_form),
+  caption = paste0("Giorni formazione per dipendente - ", ultimo_anno,
+                   "  [", delta("giorni_form"), " gg vs ", ultimo_anno-1, "]"),
+  icon = "fa-graduation-cap", color = col_blu)
+```
+
+### Spesa formazione / dip. {.value-box}
+```{r}
+valueBox(fmt_eur(kpi_last$spesa_form),
+  caption = paste0("Spesa formazione per dipendente - ", ultimo_anno,
+                   "  [\u20ac", delta("spesa_form"), " vs ", ultimo_anno-1, "]"),
+  icon = "fa-euro-sign", color = col_verde)
+```
+
+### Incidenza spesa formazione {.value-box}
+```{r}
+valueBox(fmt_pct(kpi_last$incidenza_form),
+  caption = paste0("Incidenza spesa formazione su totale spesa - ", ultimo_anno),
+  icon = "fa-percentage", color = col_arancio)
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Giorni formazione per dipendente - trend nazionale
+```{r}
+f_serie <- agg_naz %>% select(anno, giorni_form, spesa_form, incidenza_form)
+
+plot_ly(f_serie, x = ~factor(anno), y = ~giorni_form, type = "bar",
+        marker = list(color = col_blu),
+        text = ~fmt_1d(giorni_form), textposition = "outside",
+        hoverinfo = "text",
+        hovertext = ~paste0("Anno ", anno, ": ", fmt_1d(giorni_form), " gg/dip.")) %>%
+  playout(yaxis = list(title = "Giorni/dipendente"), xaxis = list(title = ""))
+```
+
+### Spesa formazione per dipendente - trend nazionale
+```{r}
+plot_ly(f_serie, x = ~factor(anno), y = ~spesa_form, type = "bar",
+        marker = list(color = col_verde),
+        text = ~fmt_eur(spesa_form), textposition = "outside",
+        hoverinfo = "text",
+        hovertext = ~paste0("Anno ", anno, ": ", fmt_eur(spesa_form))) %>%
+  playout(yaxis = list(title = "\u20ac/dipendente"), xaxis = list(title = ""))
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Giorni formazione per dipendente per Regione (`r ultimo_anno`)
+```{r}
+f_reg <- d_cop_ultimo %>%
+  filter(!is.na(regione)) %>%
+  group_by(regione) %>%
+  summarise(
+    giorni = sum(GIORNI_FORM_TOT, na.rm=TRUE) / pmax(sum(PERSONALE_TOT, na.rm=TRUE),1),
+    spesa  = sum(SPESA_FORMAZIONE_L020, na.rm=TRUE) / pmax(sum(PERSONALE_TOT, na.rm=TRUE),1),
+    n_pa   = n(), .groups = "drop") %>%
+  arrange(giorni)
+
+plot_ly(f_reg,
+        y = ~factor(regione, levels = regione), x = ~giorni,
+        type = "bar", orientation = "h",
+        marker = list(color = col_blu),
+        text = ~fmt_1d(giorni), textposition = "outside",
+        hovertext = ~paste0(regione, ": ", fmt_1d(giorni), " gg/dip."),
+        hoverinfo = "text") %>%
+  playout(xaxis = list(title = "Giorni formazione / dipendente"),
+          yaxis = list(title = ""), margin = list(l = 160, t = 35, r = 20, b = 50))
+```
+
+### Spesa formazione per dipendente per Forma giuridica (`r ultimo_anno`)
+```{r}
+f_fg <- d_cop_ultimo %>%
+  filter(!is.na(forma_giuridica)) %>%
+  group_by(forma_giuridica) %>%
+  summarise(
+    spesa = sum(SPESA_FORMAZIONE_L020, na.rm=TRUE) / pmax(sum(PERSONALE_TOT, na.rm=TRUE),1),
+    n_pa  = n(), .groups = "drop") %>%
+  filter(n_pa >= 5) %>%
+  arrange(spesa) %>%
+  mutate(label = str_trunc(forma_giuridica, 42, side = "right"))
+
+plot_ly(f_fg,
+        y = ~factor(label, levels = label), x = ~spesa,
+        type = "bar", orientation = "h",
+        marker = list(color = col_verde),
+        text = ~fmt_eur(spesa), textposition = "outside",
+        hovertext = ~paste0(forma_giuridica, ": ", fmt_eur(spesa), " /dip."),
+        hoverinfo = "text") %>%
+  playout(xaxis = list(title = "\u20ac formazione / dipendente"),
+          yaxis = list(title = ""), margin = list(l = 260, t = 35, r = 20, b = 50))
+```
+
+<!-- ========================================================================
+     PAGINA 5 – TREND NEL TEMPO
+     ======================================================================== -->
+
+Dinamica del personale
+==============================================================================
+
+Row
+------------------------------------------------------------------------------
+
+### Tendenza personale totale per anno (nazionale)
+```{r}
+t_naz <- agg_naz %>%
+  mutate(anno_l = factor(anno))
+
+plot_ly(t_naz, x = ~anno_l, y = ~personale_tot, type = "scatter", mode = "lines+markers",
+        line = list(color = col_blu, width = 2), marker = list(size = 9, color = col_blu),
+        text = ~paste0(anno, ": ", fmt_n(personale_tot)),
+        hoverinfo = "text") %>%
+  playout(yaxis = list(title = "N. dipendenti"), xaxis = list(title = ""))
+```
+
+### Indice ricambio generazionale (under35 / over55) per anno
+```{r}
+plot_ly(t_naz, x = ~anno_l, y = ~indice_ricambio, type = "scatter", mode = "lines+markers",
+        line = list(color = col_viola, width = 2), marker = list(size = 9, color = col_viola),
+        text = ~paste0(anno, ": ", fmt_1d(indice_ricambio)),
+        hoverinfo = "text") %>%
+  add_lines(y = list(1), line = list(color = "#999", dash = "dot", width = 1),
+            name = "soglia 1", showlegend = FALSE) %>%
+  playout(yaxis = list(title = "Indice ricambio (under35/over55)"), xaxis = list(title = ""))
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Trend indicatori demografici per anno
+```{r}
+plot_ly(t_naz, x = ~anno_l, y = ~eta_media, name = "Eta' media",
+        type = "scatter", mode = "lines+markers",
+        line = list(color = col_neutro, width = 2), marker = list(size = 8),
+        yaxis = "y") %>%
+  add_trace(y = ~quota_under35, name = "Quota under 35 (%)",
+            line = list(color = col_verde, width = 2), marker = list(size = 8),
+            yaxis = "y2") %>%
+  add_trace(y = ~quota_over55, name = "Quota over 55 (%)",
+            line = list(color = col_warn, width = 2), marker = list(size = 8),
+            yaxis = "y2") %>%
+  playout(
+    yaxis  = list(title = "Eta' media (anni)", side = "left",  showgrid = TRUE),
+    yaxis2 = list(title = "Quote (%)",         side = "right", overlaying = "y",
+                  showgrid = FALSE, ticksuffix = "%"),
+    xaxis  = list(title = ""),
+    legend = list(orientation = "h", y = -0.15))
+```
+
+### Trend formazione per anno
+```{r}
+plot_ly(t_naz, x = ~anno_l, y = ~giorni_form, name = "Giorni form./dip.",
+        type = "scatter", mode = "lines+markers",
+        line = list(color = col_blu, width = 2), marker = list(size = 8),
+        yaxis = "y") %>%
+  add_trace(y = ~spesa_form, name = "Spesa form./dip. (\u20ac)",
+            line = list(color = col_verde, width = 2), marker = list(size = 8),
+            yaxis = "y2") %>%
+  playout(
+    yaxis  = list(title = "Giorni / dipendente", side = "left",  showgrid = TRUE),
+    yaxis2 = list(title = "\u20ac / dipendente",  side = "right", overlaying = "y",
+                  showgrid = FALSE, tickprefix = "\u20ac"),
+    xaxis  = list(title = ""),
+    legend = list(orientation = "h", y = -0.15))
+```
+
+<!-- ========================================================================
+     PAGINA 6 – VISTE AGGREGATE PER CLASSIFICAZIONE
+     ======================================================================== -->
+
+Viste Aggregate
+==============================================================================
+
+Row
+------------------------------------------------------------------------------
+
+### Personale e indicatori per Forma giuridica (`r ultimo_anno`)
+```{r}
+agg_fg <- d_cop_ultimo %>%
+  filter(!is.na(forma_giuridica)) %>%
+  group_by(forma_giuridica) %>%
+  agg_indicatori() %>%
+  filter(n_pa >= 3) %>%
+  arrange(desc(personale_tot)) %>%
+  slice_head(n = 20) %>%
+  mutate(label = str_trunc(forma_giuridica, 40, side = "right"))
+
+plot_ly(agg_fg,
+        x = ~quota_under35, y = ~eta_media,
+        type = "scatter", mode = "markers",
+        size = ~personale_tot, sizes = c(10, 60),
+        color = ~indice_ricambio,
+        colors = c(col_warn, "#F0E68C", col_verde),
+        text  = ~paste0("<b>", forma_giuridica, "</b><br>",
+                        "Personale: ", fmt_n(personale_tot), "<br>",
+                        "Eta' media: ", fmt_1d(eta_media), "<br>",
+                        "Under 35: ", fmt_pct(quota_under35), "<br>",
+                        "Over 55: ", fmt_pct(quota_over55), "<br>",
+                        "Indice ricambio: ", fmt_1d(indice_ricambio)),
+        hoverinfo = "text") %>%
+  playout(
+    xaxis = list(title = "Quota under 35 (%)", ticksuffix = "%"),
+    yaxis = list(title = "Eta' media (anni)"),
+    legend = list(title = list(text = "Ind. ricambio")))
+```
+
+### Indicatori chiave per Regione (`r ultimo_anno`) - tabella
+```{r}
+agg_reg_tab <- d_cop_ultimo %>%
+  filter(!is.na(regione)) %>%
+  group_by(Regione = regione) %>%
+  agg_indicatori() %>%
+  select(Regione, n_pa, personale_tot, eta_media, quota_under35,
+         quota_over55, indice_ricambio, tasso_assunzione, giorni_form, spesa_form) %>%
+  mutate(across(where(is.numeric), ~round(.x, 1))) %>%
+  arrange(Regione) %>%
+  rename(`N PA` = n_pa,
+         `Personale` = personale_tot,
+         `Eta' media` = eta_media,
+         `% Under35` = quota_under35,
+         `% Over55` = quota_over55,
+         `Ind. ricambio` = indice_ricambio,
+         `Tx assunzione (%)` = tasso_assunzione,
+         `Gg form./dip.` = giorni_form,
+         `Spesa form./dip.` = spesa_form)
+
+datatable(agg_reg_tab,
+          rownames = FALSE, filter = "top",
+          options = list(pageLength = 21, language = dt_lang,
+                         scrollX = TRUE, dom = "t")) %>%
+  formatRound(c("Personale"), digits = 0, mark = ".") %>%
+  formatStyle("% Under35", background = styleColorBar(c(0, 40), "#C8E6C9")) %>%
+  formatStyle("% Over55",  background = styleColorBar(c(0, 70), "#FFCDD2")) %>%
+  formatStyle("Ind. ricambio", background = styleColorBar(c(0, 1.5), "#B3E5FC"))
+```
+
+Row
+------------------------------------------------------------------------------
+
+### Indicatori chiave per Forma giuridica (`r ultimo_anno`) - tabella
+```{r}
+agg_fg_tab <- d_cop_ultimo %>%
+  filter(!is.na(forma_giuridica)) %>%
+  group_by(`Forma giuridica` = forma_giuridica) %>%
+  agg_indicatori() %>%
+  select(`Forma giuridica`, n_pa, personale_tot, eta_media, quota_under35,
+         quota_over55, indice_ricambio, tasso_assunzione, giorni_form, spesa_form) %>%
+  mutate(across(where(is.numeric), ~round(.x, 1))) %>%
+  arrange(desc(n_pa)) %>%
+  rename(`N PA` = n_pa, `Personale` = personale_tot,
+         `Eta' media` = eta_media, `% Under35` = quota_under35,
+         `% Over55` = quota_over55, `Ind. ricambio` = indice_ricambio,
+         `Tx assunzione (%)` = tasso_assunzione,
+         `Gg form./dip.` = giorni_form, `Spesa form./dip.` = spesa_form)
+
+datatable(agg_fg_tab,
+          rownames = FALSE, filter = "top",
+          options = list(pageLength = 10, language = dt_lang, scrollX = TRUE)) %>%
+  formatRound("Personale", digits = 0, mark = ".") %>%
+  formatStyle("% Under35", background = styleColorBar(c(0, 40), "#C8E6C9")) %>%
+  formatStyle("% Over55",  background = styleColorBar(c(0, 70), "#FFCDD2"))
+```

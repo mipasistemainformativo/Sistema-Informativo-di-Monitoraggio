@@ -1,0 +1,380 @@
+---
+title: "Verifica del raccordo tra Conto Annuale e Lista_raccordo_SIM"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: false
+    number_sections: true
+fontsize: 11pt
+geometry: margin=2.5cm
+header-includes:
+  - \usepackage{placeins}
+  - \usepackage{float}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+
+# NOTA OPERATIVA
+# Questo file è pensato per essere collocato in:
+#   03_Scripts/Conto_annuale/
+# Se viene spostato altrove, aggiornare i due source() seguenti.
+source("../00_config.R")
+source("../00_sim_helpers.R")
+
+library(dplyr)
+library(stringr)
+library(readxl)
+library(janitor)
+library(googledrive)
+library(ggplot2)
+library(gt)
+library(scales)
+library(tibble)
+
+# Account con accesso al Drive del SIM
+drive_auth(
+  email = "mipa.sistemainformativo@gmail.com",
+  scopes = "https://www.googleapis.com/auth/drive"
+)
+
+anno_rif <- 2023
+```
+
+# Obiettivo
+
+Questo documento sintetizza le verifiche effettuate per raccordare il **Conto Annuale** al perimetro istituzionale del **Sistema Integrato di Monitoraggio (SIM)**.
+
+Il perimetro di riferimento è definito dalla **Lista_raccordo_SIM (Lista MPA)**, limitatamente alle istituzioni con:
+
+```text
+presente_mpa = 1
+```
+
+Il Conto Annuale viene utilizzato come fonte informativa per arricchire tale perimetro, quando disponibile, con dati su personale, flussi, età e formazione.
+
+
+```{r load-lista-sim}
+# Caricamento delle fonti
+
+## Lista_raccordo_SIM
+lists_dir <- sim_drive_ls_path(
+  DRIVE_DIR_LISTS,
+  create = FALSE
+)
+
+file_lista <- googledrive::drive_ls(lists_dir) |>
+  filter(name == "Lista_raccordo_SIM.xlsx")
+
+if (nrow(file_lista) != 1) {
+  stop("File Lista_raccordo_SIM.xlsx non trovato o non univoco nella cartella Lists.")
+}
+
+googledrive::drive_download(
+  file_lista,
+  path = file.path(DIR_TEMP, "Lista_raccordo_SIM.xlsx"),
+  overwrite = TRUE
+)
+
+lista_sim <- readxl::read_excel(
+  file.path(DIR_TEMP, "Lista_raccordo_SIM.xlsx")
+) |>
+  janitor::clean_names() |>
+  mutate(
+    codice_fiscale = as.character(codice_fiscale),
+    presente_mpa = as.numeric(presente_mpa)
+  )
+
+lista_mpa <- lista_sim |>
+  filter(presente_mpa == 1) |>
+  mutate(
+    codice_fiscale = str_pad(
+      as.character(codice_fiscale),
+      width = 11,
+      side = "left",
+      pad = "0"
+    )
+  ) |>
+  distinct(codice_fiscale, .keep_all = TRUE)
+```
+
+
+```{r helper-functions}
+## Anagrafica Conto Annuale
+ca_drive_files <- function(anno, sotto_cartella) {
+  path <- file.path(
+    DRIVE_DIR_SOURCE,
+    "Conto_annuale",
+    paste0("CA_", anno),
+    sotto_cartella
+  )
+  dir <- sim_drive_ls_path(path, create = FALSE)
+  googledrive::drive_ls(dir)
+}
+
+ca_download_read <- function(file, local_name) {
+  local_path <- file.path(DIR_TEMP, local_name)
+  googledrive::drive_download(file, path = local_path, overwrite = TRUE)
+  sim_read_any_table(local_path) |>
+    janitor::clean_names()
+}
+```
+
+```{r load-anagrafica-ca}
+files_anag <- ca_drive_files(anno_rif, "Anagrafiche")
+
+file_anag_istituzioni <- files_anag |>
+  filter(
+    str_detect(
+      name,
+      regex("TipoIstituzione_Istituzione", ignore_case = TRUE)
+    )
+  )
+
+if (nrow(file_anag_istituzioni) != 1) {
+  stop("File TipoIstituzione_Istituzione non trovato o non univoco per l'anno ", anno_rif)
+}
+
+anag_ca <- ca_download_read(
+  file_anag_istituzioni[1, ],
+  local_name = paste0("TipoIstituzione_Istituzione_", anno_rif, ".csv")
+) |>
+  transmute(
+    anno = anno_rif,
+    istituzione = paste0(codi_tipo_istituzione, codi_istituzione),
+    codice_fiscale_originale = as.character(codi_fiscale),
+    codice_fiscale = as.character(codi_fiscale),
+    desc_tipo_istituzione = as.character(desc_tipo_istituzione),
+    desc_istituzione = as.character(desc_istituzione)
+  ) |>
+  filter(
+    !is.na(istituzione), istituzione != "",
+    !is.na(codice_fiscale), codice_fiscale != ""
+  ) |>
+  distinct(anno, istituzione, .keep_all = TRUE)
+```
+
+# Dimensione dei perimetri
+
+```{r perimetri-summary}
+perimetri <- tibble(
+  aggregato = c(
+    "Istituzioni nel perimetro MPA (presente_mpa = 1)",
+    "Istituzioni nell'anagrafica Conto Annuale"
+  ),
+  numero_istituzioni = c(
+    n_distinct(lista_mpa$codice_fiscale),
+    n_distinct(anag_ca$istituzione)
+  )
+)
+
+perimetri |>
+  gt() |>
+  cols_label(
+    aggregato = "Perimetro",
+    numero_istituzioni = "Numero istituzioni"
+  ) |>
+  fmt_number(
+    columns = numero_istituzioni,
+    decimals = 0,
+    sep_mark = "."
+  )
+```
+
+La Lista_raccordo_SIM rappresenta il riferimento istituzionale del SIM. Il Conto Annuale è invece una fonte informativa da raccordare a tale perimetro.
+
+
+# Problema riscontrato sui codici fiscali
+
+Nel confronto tra le fonti è emerso che i codici fiscali del Conto Annuale non sempre hanno lunghezza pari a 11 caratteri. In molti casi gli zeri iniziali risultano assenti.
+
+```{r cf-length-table}
+cf_length <- anag_ca |>
+  mutate(lunghezza_cf = nchar(codice_fiscale_originale)) |>
+  count(lunghezza_cf, name = "n_istituzioni") |>
+  arrange(lunghezza_cf)
+
+cf_length |>
+  gt() |>
+  tab_header(
+    title = "Distribuzione della lunghezza dei codici fiscali nel CA"
+  ) |>
+   cols_label(
+    lunghezza_cf = "Lunghezza codice fiscale",
+    n_istituzioni = "Numero istituzioni"
+  ) |>
+  fmt_number(
+    columns = n_istituzioni,
+    decimals = 0,
+    sep_mark = "."
+  )
+```
+
+
+Il problema è riconducibile alla perdita degli zeri iniziali. Ad esempio, un codice presente nella Lista_raccordo_SIM come `00012345678` può essere letto nel Conto Annuale come `12345678`.
+
+
+# Normalizzazione dei codici fiscali
+
+L'analisi ha evidenziato che molti codici fiscali nel Conto Annuale hanno lunghezza inferiore a 11 caratteri. 
+
+Esempio:
+
+```text
+Conto Annuale:       12345678
+Lista_raccordo_SIM:  00012345678
+```
+
+Per effettuare correttamente il raccordo, i codici fiscali del Conto Annuale vengono normalizzati a 11 caratteri mediante padding a sinistra con zeri.
+
+
+```{r padding-check}
+anag_ca_norm <- anag_ca |>
+  mutate(
+    codice_fiscale = str_pad(
+      codice_fiscale,
+      width = 11,
+      side = "left",
+      pad = "0"
+    )
+  )
+
+cf_length_after <- anag_ca_norm |>
+  mutate(lunghezza_cf = nchar(codice_fiscale)) |>
+  count(lunghezza_cf, name = "n_istituzioni")
+
+cf_length_after |>
+  gt() |>
+  tab_header(
+    title = "Distribuzione della lunghezza dei codici fiscali dopo la normalizzazione"
+  ) |>
+  cols_label(
+    lunghezza_cf = "Lunghezza codice fiscale",
+    n_istituzioni = "Numero istituzioni"
+  ) |>
+  fmt_number(
+    columns = n_istituzioni,
+    decimals = 0,
+    sep_mark = "."
+  )
+```
+
+La normalizzazione consente di rendere confrontabili i codici fiscali del Conto Annuale con quelli della Lista_raccordo_SIM.
+
+
+# Copertura del perimetro MPA tramite Conto Annuale
+
+Il controllo principale viene effettuato partendo dal perimetro SIM/MPA e verificando quali istituzioni trovano corrispondenza nell'anagrafica del Conto Annuale.
+
+```{r coverage-calculation}
+check_mpa_ca <- lista_mpa |>
+  left_join(
+    anag_ca_norm |>
+      mutate(match_conto_annuale = 1) |>
+      select(
+        codice_fiscale,
+        match_conto_annuale,
+        istituzione,
+        desc_tipo_istituzione,
+        desc_istituzione
+      ),
+    by = "codice_fiscale"
+  )
+
+copertura_mpa_ca <- check_mpa_ca |>
+  summarise(
+    istituzioni_mpa = n_distinct(codice_fiscale),
+    istituzioni_mpa_coperte_ca = n_distinct(codice_fiscale[match_conto_annuale == 1]),
+    istituzioni_mpa_non_coperte_ca = istituzioni_mpa - istituzioni_mpa_coperte_ca,
+    quota_copertura = istituzioni_mpa_coperte_ca / istituzioni_mpa
+  )
+
+copertura_mpa_ca |>
+  gt() |>
+  tab_header(
+    title = "Copertura del perimetro MPA da parte del CA"
+  ) |>
+  cols_label(
+    istituzioni_mpa = "MPA",
+    istituzioni_mpa_coperte_ca = "Coperte CA",
+    istituzioni_mpa_non_coperte_ca = "Non coperte CA",
+    quota_copertura = "Copertura"
+  ) |>
+  fmt_number(
+    columns = c(istituzioni_mpa, istituzioni_mpa_coperte_ca, istituzioni_mpa_non_coperte_ca),
+    decimals = 0,
+    sep_mark = "."
+  ) |>
+  fmt_percent(
+    columns = quota_copertura,
+    decimals = 1
+  )
+```
+
+```{r coverage-plot, fig.height=4.2, fig.width=7}
+coverage_plot <- copertura_mpa_ca |>
+  transmute(
+    `Coperte dal Conto Annuale` = istituzioni_mpa_coperte_ca,
+    `Non coperte dal Conto Annuale` = istituzioni_mpa_non_coperte_ca
+  ) |>
+  tidyr::pivot_longer(
+    cols = everything(),
+    names_to = "stato_copertura",
+    values_to = "n_istituzioni"
+  )
+
+coverage_plot |>
+  ggplot(aes(x = stato_copertura, y = n_istituzioni)) +
+  geom_col() +
+  geom_text(
+    aes(label = scales::comma(n_istituzioni, big.mark = ".", decimal.mark = ",")),
+    vjust = -0.3,
+    size = 3.5
+  ) +
+  labs(
+    title = "Copertura del perimetro MPA da parte del Conto Annuale",
+    x = NULL,
+    y = "Numero istituzioni"
+  ) +
+  ylim(0, max(coverage_plot$n_istituzioni) * 1.15) +
+  theme_minimal()
+```
+
+
+# Istituzioni non coperte
+
+Le istituzioni del perimetro MPA che non trovano corrispondenza nel Conto Annuale vengono mantenute nel perimetro SIM, ma avranno valori mancanti per gli indicatori derivati da questa fonte.
+
+```{r non-covered-preview}
+non_coperte <- check_mpa_ca |>
+  filter(is.na(match_conto_annuale)) |>
+  select(
+    codice_fiscale,
+    any_of(c(
+      "ragione_sociale",
+      "denominazione",
+      "descr_tipologia_istat_s13",
+      "codice_regione",
+      "dizione_regione"
+    ))
+  )
+
+non_coperte |>
+  slice_head(n = 20) |>
+  gt()
+```
+
+
+\newpage
+# Conclusioni operative
+
+Dalle verifiche emergono quattro regole operative per la costruzione del SIM:
+
+1. Il perimetro di riferimento deve partire dalla **Lista_raccordo_SIM**, filtrata con `presente_mpa = 1`.
+2. Il Conto Annuale deve essere trattato come fonte di arricchimento del perimetro.
+3. I codici fiscali del Conto Annuale devono essere normalizzati a 11 caratteri prima del raccordo.
+4. Le istituzioni MPA non osservate dal Conto Annuale devono rimanere nel master SIM con valori mancanti per gli indicatori della fonte.

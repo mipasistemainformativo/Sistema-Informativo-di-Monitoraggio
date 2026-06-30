@@ -1,0 +1,769 @@
+---
+title: "Sistema Integrato di Monitoraggio (SIM)"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: scroll
+    theme: cosmo
+    self_contained: false
+runtime: shiny
+params:
+  file_master_pa: null
+  url_conto_annuale: "http://127.0.0.1:8011"
+  url_padigitale: "http://127.0.0.1:8012"
+  url_indicators_pagopa: null 
+  url_anac: null
+  id_ente_col: null
+  nome_ente_col: null
+  regione_col: null
+  macro_gruppo_col: null
+  flag_conto_annuale_col: null
+  flag_padigitale_col: null
+  flag_anac_col: null
+
+  anno_nuts: 2024
+  risoluzione_nuts: "10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(readxl)
+  library(readr)
+  library(jsonlite)
+  library(tibble)
+  library(plotly)
+  library(DT)
+  library(leaflet)
+  library(sf)
+  library(htmltools)
+  library(flexdashboard)
+  library(shiny)
+})
+
+source("03_Scripts/00_spatial_helpers.R")
+
+`%||%` <- function(x, y) {
+  if (is.null(x) || length(x) == 0L || all(is.na(x)) || !nzchar(as.character(x[[1]]))) y else x
+}
+
+read_table_auto <- function(path) {
+  if (is.null(path) || !nzchar(path) || !file.exists(path)) {
+    stop("Lista di perimetro non trovata: ", path %||% "<NULL>")
+  }
+
+  ext <- tolower(tools::file_ext(path))
+
+  out <- switch(
+    ext,
+    xlsx = readxl::read_excel(path, col_types = "text"),
+    xls = readxl::read_excel(path, col_types = "text"),
+    rds = readRDS(path),
+    csv = readr::read_csv(path, show_col_types = FALSE),
+    json = jsonlite::fromJSON(path, simplifyDataFrame = TRUE),
+    stop("Formato lista non supportato: ", ext)
+  )
+
+  tibble::as_tibble(out)
+}
+
+as_flag <- function(x) {
+  x <- stringr::str_to_lower(stringr::str_trim(as.character(x)))
+  x %in% c("1", "true", "t", "si", "sì", "yes", "y")
+}
+
+safe_choices <- function(x) {
+  x <- sort(unique(as.character(x)))
+  x[!is.na(x) & nzchar(x)]
+}
+
+fmt_num <- function(x) {
+  format(round(x, 0), big.mark = ".", decimal.mark = ",", scientific = FALSE)
+}
+
+fmt_pct <- function(x) {
+  paste0(format(round(x, 1), decimal.mark = ",", nsmall = 1), "%")
+}
+
+master_raw <- read_table_auto(params$file_master_pa) |>
+  janitor::clean_names()
+
+required_cols <- c(
+  "codice_fiscale", "ragione_sociale", "codice_reg", "regione_bdap",
+  "codice_provincia", "provincia", "codice_comune", "comune",
+  "fg", "desc_fg", "ateco_bdap", "descr_ateco_bdap",
+  "presente_mpa", "presente_s13", "presente_bdap"
+)
+
+missing_cols <- setdiff(required_cols, names(master_raw))
+if (length(missing_cols) > 0L) {
+  stop("Nella lista mancano le colonne: ", paste(missing_cols, collapse = ", "))
+}
+
+master <- master_raw |>
+  transmute(
+    id_ente = coalesce(
+      na_if(as.character(codice_fiscale), ""),
+      na_if(as.character(codice_ente_ipa), ""),
+      paste0("LISTA_", row_number())
+    ),
+    codice_fiscale = as.character(codice_fiscale),
+    codice_ipa = as.character(codice_ente_ipa),
+    nome_ente = as.character(ragione_sociale),
+    codice_regione = str_pad(as.character(codice_reg), 2, pad = "0"),
+    regione = coalesce(as.character(regione_bdap), "Non disponibile"),
+    codice_provincia = str_pad(as.character(codice_provincia), 3, pad = "0"),
+    provincia = as.character(provincia),
+    codice_comune = as.character(codice_comune),
+    comune = as.character(comune),
+    codice_forma_giuridica = as.character(fg),
+    forma_giuridica = coalesce(as.character(desc_fg), "Non disponibile"),
+    codice_ateco = as.character(ateco_bdap),
+    ateco = coalesce(as.character(descr_ateco_bdap), "Non disponibile"),
+    presente_mpa = as_flag(presente_mpa),
+    presente_s13 = as_flag(presente_s13),
+    presente_bdap = as_flag(presente_bdap)
+  ) |>
+  distinct(id_ente, .keep_all = TRUE)
+
+nuts2_it <- scarica_nuts2_italia(
+  year = params$anno_nuts,
+  resolution = params$risoluzione_nuts
+)
+
+raccordo_regioni <- get_raccordo_regioni_nuts() |>
+  transmute(
+    codice_regione = str_pad(as.character(codice_regione), 2, pad = "0"),
+    NUTS_ID
+  )
+
+iframe_app <- function(url, title, available = TRUE) {
+  if (!available || is.null(url) || !nzchar(url)) {
+    return(div(
+      class = "sim-placeholder",
+      h3(title),
+      p("La sezione è predisposta, ma la relativa applicazione non è ancora disponibile.")
+    ))
+  }
+
+  tags$iframe(
+    src = url,
+    class = "sim-source-frame",
+    style = "width:100%; height:calc(100vh - 132px); min-height:720px; border:0; background:white;",
+    title = title
+  )
+}
+```
+
+```{r css, results='asis'}
+cat("<style>
+.navbar-brand { font-weight: 700; }
+.sim-card { border:1px solid #d9e0e6; border-radius:8px; padding:18px; background:#fff; min-height:160px; }
+.sim-card h3 { margin-top:0; }
+.sim-muted { color:#667784; font-size:13px; }
+.sim-placeholder { margin:40px; padding:30px; border:1px dashed #aab7c2; border-radius:8px; background:#f8fafb; }
+.section.sidebar { background:#f7f9fb; }
+
+/* Le pagine che ospitano app figlie devono usare tutta l'altezza disponibile. */
+.section.level1:has(.sim-source-frame),
+.section.level1:has(.sim-source-frame) > .container-fluid,
+.section.level1:has(.sim-source-frame) .chart-wrapper,
+.section.level1:has(.sim-source-frame) .chart-stage {
+  height: calc(100vh - 86px) !important;
+  min-height: 720px !important;
+  max-height: none !important;
+}
+
+.section.level1:has(.sim-source-frame) .chart-stage {
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+.sim-source-frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 132px) !important;
+  min-height: 720px;
+  border: 0;
+}
+
+</style>")
+```
+
+Overview Perimetro PA {data-icon="fa-building"}
+=======================================================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Filtri del perimetro
+
+```{r}
+selectizeInput(
+  "overview_regione",
+  "Regione",
+  choices = safe_choices(master$regione),
+  selected = character(0),
+  multiple = TRUE,
+  options = list(placeholder = "Tutte le regioni")
+)
+
+selectizeInput(
+  "overview_forma",
+  "Categoria di forma giuridica",
+  choices = safe_choices(master$forma_giuridica),
+  selected = character(0),
+  multiple = TRUE,
+  options = list(placeholder = "Tutte le forme giuridiche")
+)
+
+selectizeInput(
+  "overview_ateco",
+  "Codice / descrizione ATECO",
+  choices = setNames(
+    safe_choices(master$codice_ateco),
+    safe_choices(master$codice_ateco)
+  ),
+  selected = character(0),
+  multiple = TRUE,
+  options = list(placeholder = "Tutti i codici ATECO", maxOptions = 500)
+)
+
+checkboxGroupInput(
+  "overview_perimetri",
+  "Appartenenza ai perimetri",
+  choices = c("MPA" = "mpa", "S13" = "s13", "BDAP" = "bdap"),
+  selected = character(0)
+)
+
+radioButtons(
+  "overview_logica_perimetri",
+  "Logica dei perimetri selezionati",
+  choices = c("Almeno uno" = "any", "Tutti" = "all"),
+  selected = "any",
+  inline = TRUE
+)
+
+selectInput(
+  "overview_indicatore_mappa",
+  "Indicatore della mappa",
+  choices = c(
+    "Numero di enti" = "n_enti",
+    "Quota sul totale filtrato" = "quota_enti"
+  ),
+  selected = "n_enti"
+)
+
+actionButton("overview_reset", "Azzera filtri", icon = icon("rotate-left"))
+```
+
+```{r}
+overview_data <- reactive({
+  data <- master
+
+  if (length(input$overview_regione) > 0L) {
+    data <- filter(data, regione %in% input$overview_regione)
+  }
+
+  if (length(input$overview_forma) > 0L) {
+    data <- filter(data, forma_giuridica %in% input$overview_forma)
+  }
+
+  if (length(input$overview_ateco) > 0L) {
+    data <- filter(data, codice_ateco %in% input$overview_ateco)
+  }
+
+  selected <- input$overview_perimetri
+  if (length(selected) > 0L) {
+    flags <- cbind(
+      mpa = data$presente_mpa,
+      s13 = data$presente_s13,
+      bdap = data$presente_bdap
+    )[, selected, drop = FALSE]
+
+    keep <- if (identical(input$overview_logica_perimetri, "all")) {
+      apply(flags, 1, all)
+    } else {
+      apply(flags, 1, any)
+    }
+
+    data <- data[keep, , drop = FALSE]
+  }
+
+  data
+})
+
+observeEvent(input$overview_reset, {
+  updateSelectizeInput(session, "overview_regione", selected = character(0))
+  updateSelectizeInput(session, "overview_forma", selected = character(0))
+  updateSelectizeInput(session, "overview_ateco", selected = character(0))
+  updateCheckboxGroupInput(session, "overview_perimetri", selected = character(0))
+  updateRadioButtons(session, "overview_logica_perimetri", selected = "any")
+})
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Enti selezionati {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(
+    fmt_num(nrow(overview_data())),
+    caption = paste0("su ", fmt_num(nrow(master)), " enti nel perimetro"),
+    icon = "fa-building",
+    color = "primary"
+  )
+})
+```
+
+<!-- ### Regioni rappresentate {.value-box} -->
+
+<!-- ```{r} -->
+<!-- renderValueBox({ -->
+<!--   n <- overview_data() |> -->
+<!--     filter(!is.na(regione), regione != "", regione != "Non disponibile") |> -->
+<!--     summarise(n = n_distinct(regione)) |> -->
+<!--     pull(n) -->
+
+<!--   valueBox(fmt_num(n), caption = "Regioni con almeno un ente", icon = "fa-map", color = "info") -->
+<!-- }) -->
+<!-- ``` -->
+
+### Enti presenti nel perimetro S13 {.value-box}
+
+```{r}
+renderValueBox({
+  data <- overview_data()
+
+  n <- sum(data$presente_s13, na.rm = TRUE)
+
+  quota <- if (nrow(data) > 0L) {
+    100 * n / nrow(data)
+  } else {
+    0
+  }
+
+ valueBox(
+  value = fmt_num(n),
+  caption = HTML(
+    paste0(
+      "Enti S13 nel perimetro selezionato",
+      "<br>",
+      fmt_pct(quota),
+      " degli enti del perimetro"
+    )
+  ),
+  icon = "fa-landmark",
+  color = "success"
+)
+})
+```
+
+
+### Enti presenti in BDAP {.value-box}
+
+```{r}
+renderValueBox({
+  data <- overview_data()
+
+  n <- sum(data$presente_bdap, na.rm = TRUE)
+
+  quota <- if (nrow(data) > 0L) {
+    100 * n / nrow(data)
+  } else {
+    0
+  }
+
+  valueBox(
+  value = fmt_num(n),
+  caption = HTML(
+    paste0(
+      "Enti BDAP nel perimetro selezionato",
+      "<br>",
+      fmt_pct(quota),
+      " degli enti del perimetro"
+    )
+  ),
+  icon = "fa-database",
+  color = "warning"
+)
+})
+```
+
+
+Row {data-height=650}
+-----------------------------------------------------------------------
+
+### Distribuzione regionale {data-width=30}
+
+```{r}
+leafletOutput("overview_mappa", height = "500px")
+
+output$overview_mappa <- renderLeaflet({
+  data <- overview_data()
+
+  reg <- data |>
+    filter(!is.na(codice_regione), codice_regione != "") |>
+    count(codice_regione, regione, name = "n_enti") |>
+    mutate(quota_enti = if (nrow(data) > 0L) 100 * n_enti / nrow(data) else 0) |>
+    left_join(raccordo_regioni, by = "codice_regione")
+
+  indicator <- input$overview_indicatore_mappa
+
+  map_data <- nuts2_it |>
+    left_join(reg, by = "NUTS_ID") |>
+    mutate(valore_mappa = as.numeric(.data[[indicator]]))
+
+  values <- map_data$valore_mappa
+  valid <- values[!is.na(values)]
+  domain <- if (length(valid) == 0L) c(0, 1) else valid
+
+  pal <- colorNumeric("Blues", domain = domain, na.color = "#eeeeee")
+
+  label <- if (indicator == "n_enti") "Numero di enti" else "Quota sul totale filtrato"
+  display <- if (indicator == "n_enti") {
+    ifelse(is.na(values), "Nessun dato", fmt_num(values))
+  } else {
+    ifelse(is.na(values), "Nessun dato", fmt_pct(values))
+  }
+
+  leaflet(map_data) |>
+    addProviderTiles(providers$CartoDB.Positron) |>
+    addPolygons(
+      fillColor = ~pal(valore_mappa),
+      fillOpacity = 0.78,
+      color = "#555555",
+      weight = 1,
+      popup = ~paste0(
+        "<b>", NUTS_NAME, "</b>",
+        "<br>", label, ": ", display,
+        "<br>Enti: ", ifelse(is.na(n_enti), "Nessun dato", fmt_num(n_enti))
+      )
+    ) |>
+    addLegend(
+      pal = pal,
+      values = valid,
+      title = label,
+      position = "bottomright",
+      opacity = 0.78
+    )
+})
+```
+
+### Enti del perimetro selezionato {data-width=70}
+
+```{r tabella-overview}
+renderDT({
+  dati_tabella <- overview_data() |>
+    transmute(
+      `Nome ente` = nome_ente,
+      `Codice fiscale` = codice_fiscale,
+      `Codice IPA` = codice_ipa,
+      Regione = regione,
+      Provincia = provincia,
+      Comune = comune,
+      `Forma giuridica` = forma_giuridica,
+      `Codice ATECO` = codice_ateco,
+      `Descrizione ATECO` = ateco,
+      MPA = presente_mpa,
+      S13 = presente_s13,
+      BDAP = presente_bdap
+    )
+
+  datatable(
+    dati_tabella,
+    rownames = FALSE,
+    filter = "top",
+    extensions = c("Buttons", "Scroller"),
+    options = list(
+      dom = "Bfrtip",
+      buttons = list(
+        list(
+          extend = "csv",
+          text = "Scarica CSV",
+          filename = "enti_perimetro_SIM"
+        ),
+        list(
+          extend = "excel",
+          text = "Scarica Excel",
+          filename = "enti_perimetro_SIM"
+        )
+      ),
+      pageLength = 15,
+      scrollX = TRUE,
+      scrollY = "430px",
+      scroller = TRUE,
+      deferRender = TRUE,
+      autoWidth = TRUE
+    ),
+    class = "display compact stripe"
+  )
+})
+```
+
+Row {data-height=700}
+-------------------------------------
+
+### Composizione per forma giuridica  {data-width=50}
+
+```{r}
+renderPlotly({
+  tab <- overview_data() |>
+    filter(
+      !is.na(forma_giuridica),
+      forma_giuridica != ""
+    ) |>
+    count(forma_giuridica, sort = TRUE) |>
+    slice_head(n = 12) |>
+    mutate(
+      forma_label = stringr::str_wrap(
+        forma_giuridica,
+        width = 38
+      )
+    )
+
+  plot_ly(
+    tab,
+    x = ~n,
+    y = ~reorder(forma_label, n),
+    type = "bar",
+    orientation = "h",
+    hovertext = ~paste0(
+      "<b>", forma_giuridica, "</b>",
+      "<br>Numero di enti: ", fmt_num(n)
+    ),
+    hoverinfo = "text",
+    textposition = "none"
+  ) |>
+    layout(
+      xaxis = list(
+        title = "Numero di enti",
+        rangemode = "tozero",
+        separatethousands = TRUE
+      ),
+      yaxis = list(
+        title = "",
+        automargin = TRUE,
+        tickfont = list(size = 11)
+      ),
+      margin = list(
+        l = 250,
+        r = 30,
+        t = 20,
+        b = 60
+      ),
+      showlegend = FALSE
+    ) |>
+    config(
+      displayModeBar = FALSE,
+      responsive = TRUE
+    )
+})
+```
+
+### Principali attività ATECO  {data-width=50}
+
+```{r}
+renderPlotly({
+  tab <- overview_data() |>
+    mutate(
+      ateco_label_completo = case_when(
+        is.na(codice_ateco) | codice_ateco == "" ~ ateco,
+        is.na(ateco) | ateco == "" ~ codice_ateco,
+        TRUE ~ paste0(codice_ateco, " — ", ateco)
+      )
+    ) |>
+    filter(
+      !is.na(ateco_label_completo),
+      ateco_label_completo != ""
+    ) |>
+    count(ateco_label_completo, sort = TRUE) |>
+    slice_head(n = 12) |>
+    mutate(
+      ateco_label = stringr::str_wrap(
+        ateco_label_completo,
+        width = 46
+      )
+    )
+
+  plot_ly(
+    tab,
+    x = ~n,
+    y = ~reorder(ateco_label, n),
+    type = "bar",
+    orientation = "h",
+    hovertext = ~paste0(
+      "<b>", ateco_label_completo, "</b>",
+      "<br>Numero di enti: ", fmt_num(n)
+    ),
+    hoverinfo = "text",
+    textposition = "none"
+  ) |>
+    layout(
+      xaxis = list(
+        title = "Numero di enti",
+        rangemode = "tozero",
+        separatethousands = TRUE
+      ),
+      yaxis = list(
+        title = "",
+        automargin = TRUE,
+        tickfont = list(size = 10)
+      ),
+      margin = list(
+        l = 340,
+        r = 30,
+        t = 20,
+        b = 60
+      ),
+      showlegend = FALSE
+    ) |>
+    config(
+      displayModeBar = FALSE,
+      responsive = TRUE
+    )
+})
+```
+
+Row {data-height=620}
+### Sovrapposizione dei perimetri
+
+```{r}
+renderPlotly({
+  tab <- overview_data() |>
+    mutate(
+      combinazione = case_when(
+        presente_mpa & presente_s13 & presente_bdap ~ "MPA + S13 + BDAP",
+        presente_mpa & presente_s13 ~ "MPA + S13",
+        presente_mpa & presente_bdap ~ "MPA + BDAP",
+        presente_s13 & presente_bdap ~ "S13 + BDAP",
+        presente_mpa ~ "Solo MPA",
+        presente_s13 ~ "Solo S13",
+        presente_bdap ~ "Solo BDAP",
+        TRUE ~ "Fuori dai tre perimetri"
+      )
+    ) |>
+    count(combinazione, sort = TRUE)
+
+  plot_ly(
+    tab,
+    labels = ~combinazione,
+    values = ~n,
+    type = "pie",
+    hole = 0.45,
+    textinfo = "label+percent",
+    hoverinfo = "label+value+percent"
+  ) |>
+    layout(showlegend = FALSE) |>
+    config(displayModeBar = FALSE)
+})
+```
+
+<!-- Perimetro PA {data-icon="fa-table"} -->
+<!-- ======================================================================= -->
+
+<!-- Column -->
+<!-- ----------------------------------------------------------------------- -->
+
+<!-- ### Enti della lista filtrata -->
+
+<!-- ```{r} -->
+<!-- renderDT({ -->
+<!--   overview_data() |> -->
+<!--     select( -->
+<!--       nome_ente, codice_fiscale, codice_ipa, -->
+<!--       regione, provincia, comune, -->
+<!--       forma_giuridica, codice_ateco, ateco, -->
+<!--       presente_mpa, presente_s13, presente_bdap -->
+<!--     ) |> -->
+<!--     datatable( -->
+<!--       rownames = FALSE, -->
+<!--       filter = "top", -->
+<!--       options = list(pageLength = 25, scrollX = TRUE) -->
+<!--     ) -->
+<!-- }) -->
+<!-- ``` -->
+
+Fonti {data-icon="fa-database"}
+=======================================================================
+
+Row
+-----------------------------------------------------------------------
+
+### Conto annuale
+
+<div class="sim-card">
+<h3>Conto annuale</h3>
+<p>Personale, struttura demografica, turnover, formazione e copertura degli enti.</p>
+<p class="sim-muted">Apri la sezione dedicata dalla barra di navigazione.</p>
+</div>
+
+### PA Digitale 2026
+
+<div class="sim-card">
+<h3>PA Digitale 2026</h3>
+<p>Candidature finanziate, importi, misure e distribuzione territoriale.</p>
+<p class="sim-muted">La dashboard esistente resta un'applicazione autonoma.</p>
+</div>
+
+### PagoPA
+
+<div class="sim-card">
+<h3>PagoPA</h3>
+<p>Transazioni, categorie di enti e fasce di importo dei pagamenti.</p>
+<p class="sim-muted">La dashboard esistente resta un'applicazione autonoma.</p>
+</div>
+
+### ANAC
+
+<div class="sim-card">
+<h3>ANAC — Monitoraggio Appalti</h3>
+<p>Gare, aggiudicazioni, importi, distribuzione regionale e confronto per forma giuridica e settore CPV.</p>
+<p class="sim-muted">Apri la sezione dedicata dalla barra di navigazione.</p>
+</div>
+
+Conto annuale {data-icon="fa-users"}
+=======================================================================
+
+Row {data-height=900}
+-----------------------------------------------------------------------
+
+```{r, results='asis'}
+iframe_app(params$url_conto_annuale, "Conto annuale")
+```
+
+PA Digitale 2026 {data-icon="fa-laptop"}
+=======================================================================
+
+Row {data-height=900}
+-----------------------------------------------------------------------
+
+```{r, results='asis'}
+iframe_app(params$url_padigitale, "PA Digitale 2026")
+```
+
+PagoPA {data-icon="fa-euro-sign"}
+=======================================================================
+
+Row {data-height=900}
+-----------------------------------------------------------------------
+
+```{r, results='asis'}
+iframe_app(params$url_indicators_pagopa, "PagoPA")
+```
+
+ANAC {data-icon="fa-file-contract"}
+=======================================================================
+
+Row {data-height=900}
+-----------------------------------------------------------------------
+
+```{r, results='asis'}
+iframe_app(params$url_anac, "ANAC", available = !is.null(params$url_anac) && nzchar(params$url_anac))
+```

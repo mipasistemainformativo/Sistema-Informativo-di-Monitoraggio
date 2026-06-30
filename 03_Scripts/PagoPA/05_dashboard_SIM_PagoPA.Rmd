@@ -1,0 +1,784 @@
+---
+title: "PagoPA, IO & SEND"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: scroll
+    theme: cosmo
+    self_contained: false
+runtime: shiny
+params:
+  file_indicators: ""
+  file_regioni: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+suppressPackageStartupMessages({
+  library(shiny)
+  library(flexdashboard)
+  library(jsonlite)
+  library(dplyr)
+  library(plotly)
+  library(tidyr)
+  library(leaflet)
+  library(sf)
+  library(ggplot2)
+  library(DT)
+})
+
+#Caricamento dati e parametri
+df <- fromJSON(params$file_indicators) %>%
+  filter(fil_val != "Complessivo") %>%
+  mutate(ind_val = as.numeric(ind_val))
+
+mappatura_nomi <- readRDS(params$file_regioni) %>%
+  select(codice_reg, reg)
+
+# Confini Regioni
+geojson_url <- "https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson"
+regioni_shape <- read_sf(geojson_url) %>%
+  mutate(reg_code = sprintf("%02d", as.numeric(reg_istat_code_num)))
+
+# Calcolo etichette
+anni_presenti <- as.numeric(df$fil_val[df$fil == "fil_anno"])
+label_periodo <- paste0(" (", min(anni_presenti, na.rm = TRUE), "-", max(anni_presenti, na.rm = TRUE), ")")
+
+# Mappature Dizionari
+ind_pagoPA_categorie <- c("ind8"="ACI","ind9"="Comuni","ind10"="Consorzi universitari","ind11"="Enti comunali","ind12"="Enti provinciali","ind13"="Enti regionali","ind14"="Ordini e collegi","ind15"="Province","ind16"="PA Centrali","ind17"="Regioni","ind18"="Ricerca","ind19"="Salute centrale","ind20"="Salute locale","ind21"="Salute regionale","ind22"="Salute servizi","ind23"="Scuola","ind24"="Università","ind25"="Altri enti territoriali","ind26"="Utility")
+ind_fasce_nomi <- c("ind31"="ACI","ind32"="Comuni","ind33"="Consorzi universitari","ind34"="Enti comunali","ind35"="Enti provinciali","ind36"="Enti regionali","ind37"="Ordini e collegi","ind38"="Province","ind39"="PA Centrali","ind40"="Regioni","ind41"="Ricerca","ind42"="Salute centrale","ind43"="Salute locale","ind44"="Salute regionale","ind45"="Salute servizi","ind46"="Scuola","ind47"="Università","ind48"="Altri enti territoriali","ind49"="Utility","ind50"="Enti donazioni")
+ind_regionali_map <- c("ind1"="Enti IO (Comuni)","ind2"="Servizi IO (Comuni)","ind3"="Enti IO (Istruzione)","ind4"="Servizi IO (Istruzione)","ind5"="Comuni attivi su SEND (n.)","ind6"="Comuni attivi su SEND (%)")
+```
+
+Overview Nazionale
+=======================================================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Filtro Overview
+
+```{r}
+selectInput("anno_ov", "Seleziona Anno:", choices = unique(df$fil_val[df$fil == "fil_anno"]))
+helpText(
+  HTML(paste0(
+    "<div style='font-size: 12px; color: #666; line-height: 1.5;'>",
+    "<strong>Fonte:</strong> PagoPA S.p.A.<br>",
+    "<strong>Annualità:</strong> ", min(anni_presenti, na.rm = TRUE), "/", max(anni_presenti, na.rm = TRUE),
+    "</div>"
+  ))
+)
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Messaggi IO totali`r label_periodo` {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(
+    format(sum(df$ind_val[df$ind == "ind7"], na.rm = TRUE), big.mark = "."),
+    icon = "fa-database",
+    color = "primary"
+  )
+})
+```
+
+### Notifiche SEND totali`r label_periodo` {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(
+    format(sum(df$ind_val[df$ind == "ind29"], na.rm = TRUE), big.mark = "."),
+    icon = "fa-database",
+    color = "success"
+  )
+})
+```
+
+### Transazioni pagoPA totali`r label_periodo` {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(
+    format(sum(df$ind_val[df$ind %in% paste0("ind", 8:26)], na.rm = TRUE), big.mark = "."),
+    icon = "fa-database",
+    color = "warning"
+  )
+})
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Messaggi IO {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(
+    format(sum(df$ind_val[df$ind == "ind7" & df$fil_val == input$anno_ov], na.rm = TRUE), big.mark = "."),
+    caption = paste0("Messaggi IO anno ", input$anno_ov),
+    icon = "fa-envelope",
+    color = "primary"
+  )
+})
+```
+
+### Notifiche SEND {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(
+    format(sum(df$ind_val[df$ind == "ind29" & df$fil_val == input$anno_ov], na.rm = TRUE), big.mark = "."),
+    caption = paste0("Notifiche SEND anno ", input$anno_ov),
+    icon = "fa-paper-plane",
+    color = "success"
+  )
+})
+```
+
+### Transazioni pagoPA {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(
+    format(sum(df$ind_val[df$ind %in% paste0("ind", 8:26) & df$fil_val == input$anno_ov], na.rm = TRUE), big.mark = "."),
+    caption = paste0("Transazioni PagoPA anno ", input$anno_ov),
+    icon = "fa-euro-sign",
+    color = "warning"
+  )
+})
+```
+
+
+
+Row {data-height=550}
+-----------------------------------------------------------------------
+
+### Trend Mensile Messaggi IO
+
+```{r}
+renderPlotly({
+  t_df <- df %>% 
+    filter(ind == "ind7", fil_val == input$anno_ov) %>% 
+    arrange(sub_fil_val) %>%
+    mutate(
+      mese_label = factor(
+        sub_fil_val,
+        levels = sprintf("%02d", 1:12),
+        labels = c("Gen", "Feb", "Mar", "Apr", "Mag", "Giu", 
+                   "Lug", "Ago", "Set", "Ott", "Nov", "Dic")
+      )
+    )
+
+  p <- ggplot(t_df, aes(x = mese_label, y = ind_val, group = 1)) +
+    geom_line(color = "#5DADE2", linewidth = 1) +
+    geom_point(color = "#5DADE2", size = 2) +
+    scale_y_continuous(
+      labels = scales::label_number(
+        scale = 1e-6,              
+        suffix = "M",               
+        big.mark = ".",
+        decimal.mark = ",",
+        accuracy = 0.1
+      )
+    ) +
+    theme_minimal() +
+    theme(
+      axis.title.x = element_text(size = 14),
+      axis.text.x  = element_text(size = 12),
+      axis.text.y  = element_text(size = 11)
+    ) +
+    labs(x = "Mese", y = "Messaggi (M)")
+
+})
+```
+
+### Top 5 Categorie pagoPA
+
+```{r}
+renderPlotly({
+  p_df <- df %>%
+    filter(ind %in% paste0("ind", 8:26), fil_val == input$anno_ov) %>%
+    group_by(ind) %>%
+    summarise(tot = sum(ind_val, na.rm = TRUE)) %>%
+    mutate(nome = ind_pagoPA_categorie[ind]) %>%
+    arrange(desc(tot)) %>%
+    head(5)
+
+
+  max_val <- max(p_df$tot, na.rm = TRUE)
+  scala <- ifelse(max_val >= 1e9, 1e-9, 1e-6)
+  suffisso <- ifelse(max_val >= 1e9, " miliardi", " milioni")
+
+  p <- ggplot(p_df, aes(x = reorder(nome, tot), y = tot)) +
+    geom_col(fill = "#F39C12") +
+    coord_flip() +
+    scale_y_continuous(
+      labels = scales::label_number(
+        scale = scala,
+        suffix = suffisso,
+        big.mark = ".",
+        decimal.mark = ",",
+        accuracy = 0.1
+      )
+    ) +
+    theme_minimal() +
+    labs(x = NULL, y = NULL)
+
+  ggplotly(p)
+})
+```
+
+
+
+Riepilogo {data-icon="fa-table"}
+=======================================================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Filtro
+
+```{r}
+helpText("Il filtro Anno è condiviso con l'Overview Nazionale.")
+
+helpText(
+  HTML(paste0(
+    "<div style='font-size: 12px; color: #666; line-height: 1.5;'>",
+    "<strong>Fonte:</strong> PagoPA S.p.A.<br>",
+    "<strong>Annualità:</strong> ", min(anni_presenti, na.rm = TRUE), "/", max(anni_presenti, na.rm = TRUE),
+    "</div>"
+  ))
+)
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Distribuzione regionale IO — Riepilogo per indicatore
+
+```{r}
+renderDT({
+  tab <- df %>%
+    filter(fil == "fil_reg", ind %in% names(ind_regionali_map)) %>%
+    left_join(mappatura_nomi, by = c("fil_val" = "codice_reg")) %>%
+    mutate(indicatore = ind_regionali_map[ind]) %>%
+    select(Regione = reg, Indicatore = indicatore, Valore = ind_val) %>%
+    filter(!is.na(Regione)) %>%
+    pivot_wider(names_from = Indicatore, values_from = Valore) %>%
+    arrange(Regione) %>%
+    select(0:6) 
+
+  datatable(
+    tab,
+    rownames  = FALSE,
+    filter    = "top",
+    extensions = c("Buttons"),           
+    options   = list(
+      pageLength = 21,
+      scrollX = TRUE,
+      dom = 'Bfrtip',                      
+      buttons = list(
+        list(extend = 'excel', text = 'Excel', filename = 'Distribuzione_Regionale_IO'),
+        list(extend = 'csv', text = 'CSV', filename = 'Distribuzione_Regionale_IO'),
+        list(extend = 'pdf', text = 'PDF', filename = 'Distribuzione_Regionale_IO'),
+        list(extend = 'print', text = 'Stampa')
+      )
+    )
+  ) %>%
+    formatRound(
+      columns = setdiff(names(tab), "Regione"),
+      digits  = 0
+    )
+})
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Analisi pagoPA — Transazioni per categoria di ente (anno selezionato)
+
+```{r}
+renderDT({
+  tab <- df %>%
+    filter(fil == "fil_anno", fil_val == input$anno_ov,
+           ind %in% names(ind_pagoPA_categorie)) %>%
+    group_by(ind) %>%
+    summarise(Transazioni = sum(ind_val, na.rm = TRUE), .groups = "drop") %>%
+    mutate(`Categoria Ente` = ind_pagoPA_categorie[ind]) %>%
+    select(`Categoria Ente`, Transazioni) %>%
+    arrange(desc(Transazioni))
+
+  datatable(
+    tab,
+    rownames = FALSE,
+    filter   = "top",
+    extensions = c("Buttons"),
+    options  = list(
+      pageLength = 19,
+      order = list(list(1, "desc")),
+      dom = 'Bfrtip',
+      buttons = list(
+        list(extend = 'excel', text = 'Excel', filename = 'Transazioni_pagoPA'),
+        list(extend = 'csv', text = 'CSV', filename = 'Transazioni_pagoPA'),
+        list(extend = 'pdf', text = 'PDF', filename = 'Transazioni_pagoPA'),
+        list(extend = 'print', text = 'Stampa')
+      )
+    )
+  ) %>%
+    formatRound("Transazioni", digits = 0)
+})
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Messaggi IO — Andamento mensile (anno selezionato)
+
+```{r}
+renderDT({
+  tab <- df %>%
+    filter(ind == "ind7", fil_val == input$anno_ov) %>%
+    mutate(
+      Mese = factor(
+        sub_fil_val,
+        levels = sprintf("%02d", 1:12),
+        labels = c("Gen", "Feb", "Mar", "Apr", "Mag", "Giu", 
+                   "Lug", "Ago", "Set", "Ott", "Nov", "Dic")
+      )
+    ) %>%
+    select(Mese, `Messaggi IO` = ind_val) %>%
+    arrange(Mese)
+
+  datatable(
+    tab,
+    rownames = FALSE,
+    filter   = "top",
+    extensions = c("Buttons"),
+    options  = list(
+      pageLength = 12,
+      order = list(list(0, "asc")),
+      dom = 'Bfrtip',
+      buttons = list(
+        list(extend = 'excel', text = 'Excel', filename = 'Messaggi_IO'),
+        list(extend = 'csv', text = 'CSV', filename = 'Messaggi_IO'),
+        list(extend = 'pdf', text = 'PDF', filename = 'Messaggi_IO'),
+        list(extend = 'print', text = 'Stampa')
+      )
+    )
+  ) %>%
+    formatRound("Messaggi IO", digits = 0)
+})
+```
+
+### Notifiche SEND — Notifiche analogiche e digitali per mese (anno selezionato)
+
+```{r}
+renderDT({
+  tab <- df %>%
+    filter(ind %in% c("ind27", "ind28", "ind29"), fil_val == input$anno_ov) %>%
+    mutate(
+      tipo = case_when(
+        ind == "ind27" ~ "Analogiche",
+        ind == "ind28" ~ "Digitali",
+        ind == "ind29" ~ "Totale"
+      ),
+      Mese = factor(
+        sub_fil_val,
+        levels = sprintf("%02d", 1:12),
+        labels = c("Gen", "Feb", "Mar", "Apr", "Mag", "Giu", 
+                   "Lug", "Ago", "Set", "Ott", "Nov", "Dic")
+      )
+    ) %>%
+    select(Mese, tipo, ind_val) %>%
+    filter(!is.na(Mese)) %>%
+    pivot_wider(names_from = tipo, values_from = ind_val) %>%
+    arrange(Mese)
+
+  datatable(
+    tab,
+    rownames = FALSE,
+    filter   = "top",
+    extensions = c("Buttons"),
+    options  = list(
+      pageLength = 12,
+      order = list(list(0, "asc")),
+      dom = 'Bfrtip',
+      buttons = list(
+        list(extend = 'excel', text = 'Excel', filename = 'Notifiche_SEND'),
+        list(extend = 'csv', text = 'CSV', filename = 'Notifiche_SEND'),
+        list(extend = 'pdf', text = 'PDF', filename = 'Notifiche_SEND'),
+        list(extend = 'print', text = 'Stampa')
+      )
+    )
+  ) %>%
+    formatRound(c("Analogiche", "Digitali", "Totale"), digits = 0)
+})
+```
+
+Ripartizione Territoriale IO
+=======================================================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Parametri Regionali
+
+```{r}
+selectInput(
+  "sel_ind_reg", "Scegli Indicatore:",
+  choices = setNames(names(ind_regionali_map), ind_regionali_map)
+)
+helpText(
+  HTML(paste0(
+    "<div style='font-size: 12px; color: #666; line-height: 1.5;'>",
+    "<strong>Fonte:</strong> PagoPA S.p.A.<br>",
+    "<strong>Annualità:</strong> ", min(anni_presenti, na.rm = TRUE), "/", max(anni_presenti, na.rm = TRUE),
+    "</div>"
+  ))
+)
+```
+
+Row {data-height=700}
+-----------------------------------------------------------------------
+
+### Mappa Geografica
+
+```{r}
+leafletOutput("mappa_regioni", height = "600px")
+
+output$mappa_regioni <- renderLeaflet({
+  dati_m <- df %>% filter(fil == "fil_reg", ind == input$sel_ind_reg)
+  mf <- regioni_shape %>% left_join(dati_m, by = c("reg_code" = "fil_val"))
+  pal <- colorNumeric("YlGnBu", mf$ind_val)
+
+  leaflet(mf) %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    addPolygons(
+      fillColor = ~pal(ind_val), weight = 1, color = "white", fillOpacity = 0.8,
+      label = ~paste0(reg_name, ": ", format(ind_val, big.mark = "."))
+    )
+})
+```
+
+### Classifica Regioni
+
+```{r}
+renderPlotly({
+  reg_df <- df %>%
+    filter(fil == "fil_reg", ind == input$sel_ind_reg) %>%
+    left_join(mappatura_nomi, by = c("fil_val" = "codice_reg")) %>%
+    arrange(desc(ind_val))
+  nome_indicatore <- ind_regionali_map[input$sel_ind_reg]
+
+  p <- ggplot(reg_df, aes(x = reorder(reg, ind_val), y = ind_val)) +
+    geom_col(fill = "#5DADE2") +
+    coord_flip() +
+    theme_minimal() +
+    theme(
+      axis.text.y = element_text(size = 8),
+      axis.title.x = element_text(size = 12),
+      axis.title.y = element_text(size = 12)
+    ) +
+    labs(
+      x = "Regione",                          
+      y = nome_indicatore                      
+    )
+
+  ggplotly(p) %>% layout(margin = list(l = 180))
+})
+```
+
+Analisi pagoPA (Enti & Fasce)
+=======================================================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Filtri pagoPA
+
+```{r}
+selectInput("anno_pago", "1. Seleziona Anno:", choices = unique(df$fil_val[df$fil == "fil_anno"]))
+selectInput("mese_pago", "2. Seleziona Mese (per Enti):", choices = sprintf("%02d", 1:12))
+hr()
+selectInput(
+  "cat_fasce", "3. Categoria per Fasce d'Importo:",
+  choices = setNames(names(ind_fasce_nomi), ind_fasce_nomi)
+)
+helpText(
+  HTML(paste0(
+    "<div style='font-size: 12px; color: #666; line-height: 1.5;'>",
+    "<strong>Fonte:</strong> PagoPA S.p.A.<br>",
+    "<strong>Annualità:</strong> ", min(anni_presenti, na.rm = TRUE), "/", max(anni_presenti, na.rm = TRUE),
+    "</div>"
+  ))
+)
+```
+
+Row {data-height=500}
+-----------------------------------------------------------------------
+
+### A. Transazioni per categoria di Ente (mensile)
+
+```{r}
+renderPlotly({
+  c_df <- df %>%
+    filter(fil == "fil_anno", fil_val == input$anno_pago, sub_fil_val == input$mese_pago, ind %in% paste0("ind", 8:26)) %>%
+    mutate(nome = ind_pagoPA_categorie[ind]) %>%
+    arrange(desc(ind_val))
+
+  if (nrow(c_df) == 0) return(NULL)
+
+  p <- ggplot(c_df, aes(x = reorder(nome, ind_val), y = ind_val)) +
+    geom_col(fill = "#F39C12") +
+    coord_flip() +
+    theme_minimal() +
+    labs(x = NULL, y = "N. Transazioni")
+
+  ggplotly(p) %>% layout(margin = list(l = 150))
+})
+```
+
+Row {data-height=500}
+-----------------------------------------------------------------------
+
+###
+
+```{r}
+renderPlotly({
+  f_df <- df %>% filter(fil == "fil_anno", fil_val == input$anno_pago, sub_fil == "fil_fascia", ind == input$cat_fasce)
+
+  if (nrow(f_df) == 0) return(NULL)
+
+  titolo <- paste("Fasce d'Importo per:", ind_fasce_nomi[input$cat_fasce], "- Anno", input$anno_pago)
+
+  p <- ggplot(f_df, aes(x = sub_fil_val, y = ind_val)) +
+    geom_col(fill = "#F39C12") +
+    theme_minimal() +
+    labs(x = "Fascia (€)", y = "N. Transazioni", title = titolo) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  ggplotly(p)
+})
+```
+
+Distribuzione mensile messaggi IO
+=======================================================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Filtri Messaggi IO
+
+```{r}
+selectInput("anno_io", "Anno:", choices = unique(df$fil_val[df$fil == "fil_anno"]))
+selectInput("mese_io", "Mese:", choices = sprintf("%02d", 1:12))
+
+helpText(
+  HTML(paste0(
+    "<div style='font-size: 12px; color: #666; line-height: 1.5;'>",
+    "<strong>Fonte:</strong> PagoPA S.p.A.<br>",
+    "<strong>Annualità:</strong> ", min(anni_presenti, na.rm = TRUE), "/", max(anni_presenti, na.rm = TRUE),
+    "</div>"
+  ))
+)
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Messaggi nel mese selezionato {.value-box}
+
+```{r}
+renderValueBox({
+  valueBox(
+    format(sum(df$ind_val[df$ind == "ind7" & df$fil_val == input$anno_io & df$sub_fil_val == input$mese_io], na.rm = TRUE), big.mark = "."),
+    icon = "fa-comment-dots",
+    color = "#5DADE2"
+  )
+})
+```
+
+Row {data-height=600}
+-----------------------------------------------------------------------
+
+### Andamento messaggi nell'anno selezionato 
+
+```{r}
+renderPlotly({
+  i_df <- df %>% 
+    filter(ind == "ind7", fil_val == input$anno_io) %>% 
+    arrange(sub_fil_val) %>%
+    mutate(
+      mese_label = factor(
+        sub_fil_val,
+        levels = sprintf("%02d", 1:12),
+        labels = c("Gen", "Feb", "Mar", "Apr", "Mag", "Giu", 
+                   "Lug", "Ago", "Set", "Ott", "Nov", "Dic")
+      )
+    )
+
+  p <- ggplot(i_df, aes(x = mese_label, y = ind_val, group = 1)) +
+    geom_area(fill = "#5DADE2", alpha = 0.3) +
+    geom_line(color = "#5DADE2", linewidth = 1) +
+    geom_point(color = "#5DADE2", size = 2) +
+    scale_y_continuous(
+      labels = function(x) {
+        ifelse(x >= 1e9,
+               paste0(format(x/1e9, big.mark=".", decimal.mark=",", digits=1), " miliardi"),
+        ifelse(x >= 1e6,
+               paste0(format(x/1e6, big.mark=".", decimal.mark=",", digits=1), " milioni"),
+               format(x, big.mark=".", decimal.mark=",")))
+      }
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(size = 11),
+      axis.text.y = element_text(size = 10),
+      axis.title.x = element_text(size = 12),
+      axis.title.y = element_text(size = 12)
+    ) +
+    labs(x = "Mese", y = "Messaggi")
+
+  ggplotly(p)
+})
+```
+
+Notifiche SEND
+=======================================================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Filtri SEND
+
+```{r}
+selectInput("anno_send", "Anno:", choices = unique(df$fil_val[df$fil == "fil_anno"]))
+selectInput("mese_send", "Mese:", choices = sprintf("%02d", 1:12))
+
+helpText(
+  HTML(paste0(
+    "<div style='font-size: 12px; color: #666; line-height: 1.5;'>",
+    "<strong>Fonte:</strong> PagoPA S.p.A.<br>",
+    "<strong>Annualità:</strong> ", min(anni_presenti, na.rm = TRUE), "/", max(anni_presenti, na.rm = TRUE),
+    "</div>"
+  ))
+)
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Notifiche analogiche {.value-box}
+
+```{r}
+renderValueBox({
+  val <- sum(df$ind_val[df$ind == "ind27" & df$fil_val == input$anno_send & df$sub_fil_val == input$mese_send], na.rm = TRUE)
+  
+  valueBox(
+    format(val, big.mark = "."),
+    caption = paste0("Notifiche analogiche ", input$mese_send, "/", input$anno_send ),
+    icon = "fa-envelope-open",
+    color = "success"
+  )
+})
+```
+
+### Notifiche digitali {.value-box}
+
+```{r}
+renderValueBox({
+  val <- sum(df$ind_val[df$ind == "ind28" & df$fil_val == input$anno_send & df$sub_fil_val == input$mese_send], na.rm = TRUE)
+  
+  valueBox(
+    format(val, big.mark = "."),
+    caption = paste0("Notifiche digitali ", input$mese_send, "/", input$anno_send),
+    icon = "fa-bolt",
+    color = "#5DADE2"
+  )
+})
+```
+
+### Notifiche totali {.value-box}
+
+```{r}
+renderValueBox({
+  val <- sum(df$ind_val[df$ind == "ind29" & df$fil_val == input$anno_send & df$sub_fil_val == input$mese_send], na.rm = TRUE)
+  
+  valueBox(
+    format(val, big.mark = "."),
+    caption = paste0("Notifiche totali ", input$mese_send, "/", input$anno_send),
+    icon = "fa-paper-plane",
+    color = "#F39C12"
+  )
+})
+```
+
+Row {data-height=400}
+-----------------------------------------------------------------------
+
+### Ripartizione Mensile
+
+```{r}
+renderPlotly({
+  comp <- data.frame(
+    T = c("Analogiche", "Digitali"),
+    V = c(
+      sum(df$ind_val[df$ind == "ind27" & df$fil_val == input$anno_send & df$sub_fil_val == input$mese_send], na.rm = TRUE),
+      sum(df$ind_val[df$ind == "ind28" & df$fil_val == input$anno_send & df$sub_fil_val == input$mese_send], na.rm = TRUE)
+    )
+  )
+
+  p <- ggplot(comp, aes(x = T, y = V, fill = T)) +
+    geom_col() +
+    scale_fill_manual(
+      values = c(
+        "Analogiche" = "#58D68D",   
+        "Digitali"   = "#5DADE2"    
+      )
+    ) +
+    theme_minimal() +
+    theme(legend.position = "none") +
+    labs(x = NULL, y = NULL)
+
+  ggplotly(p)
+})
+```
+
+Row {data-height=500}
+-----------------------------------------------------------------------
+
+### Distribuzione per ambito (dato complessivo)
+
+```{r}
+renderPlotly({
+  a_df <- df %>% 
+    filter(ind == "ind30", fil == "fil_ambito") %>% 
+    arrange(desc(ind_val))
+  max_val <- max(a_df$ind_val, na.rm = TRUE)
+  scala <- ifelse(max_val >= 1e9, 1e-9, 1e-6)
+  suffisso <- ifelse(max_val >= 1e9, " miliardi", " milioni")
+  limite_max <- ifelse(max_val >= 1e9, 30e9, 30e6)
+
+  p <- ggplot(a_df, aes(x = reorder(fil_val, ind_val), y = ind_val)) +
+    geom_col(fill = "#F39C12") +
+    coord_flip() +
+    scale_y_continuous(
+      limits = c(0, limite_max),  
+      labels = scales::label_number(
+        scale = scala,
+        suffix = suffisso,
+        big.mark = ".",
+        decimal.mark = ",",
+        accuracy = 0.1
+      )
+    ) +
+    theme_minimal() +
+    labs(x = NULL, y = NULL)
+
+  ggplotly(p) %>% layout(margin = list(l = 150))
+})
+```
