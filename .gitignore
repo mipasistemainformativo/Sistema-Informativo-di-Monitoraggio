@@ -1,0 +1,40 @@
+# R / RStudio
+.Rhistory
+.RData
+.Ruserdata
+
+# renv
+renv/library/
+renv/python/
+
+# macOS
+.DS_Store
+
+# Data (real data must NOT be committed)
+data/*.csv
+data/*.xlsx
+data/*.xls
+
+# Dataset e output gestiti su Google Drive
+01_Dataset/
+05_Logs/
+
+# Output tabellari generati
+02_Metadata/**/*.csv
+02_Metadata/**/*.xlsx
+
+# File temporanei Office
+~$*
+*.tmp
+
+# Cache locale
+07_Temp/
+
+# Credentials / local config
+.Renviron
+config.yml
+
+.Rproj.user
+
+# Temporary files
+07_Temp/03_Scripts/Conto_annuale/old/
