@@ -1,5 +1,5 @@
 ---
-title: "Sistema Integrato di Monitoraggio (SIM) — PA digitale 2026"
+title: "PA digitale 2026"
 output:
   flexdashboard::flex_dashboard:
     orientation: columns

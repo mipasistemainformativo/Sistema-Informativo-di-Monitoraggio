@@ -1,5 +1,5 @@
 ---
-title: "Sistema Integrato di Monitoraggio (SIM)"
+title: "Sistema Informativo di Monitoraggio (SIM)"
 output:
   flexdashboard::flex_dashboard:
     orientation: rows
