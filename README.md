@@ -2,7 +2,7 @@
 
 Repository pubblica del progetto **Sistema Informativo di Monitoraggio PA (SIM)**.
 
-Il codice necessario per eseguire la dashboard si trova principalmente nella cartella `03_Scripts/`.
+Il codice necessario per eseguire la dashboard si trova principalmente nella cartella `03_Scripts/`. [GitHub](https://github.com/mipasistemainformativo/Sistema-Informativo-di-Monitoraggio/tree/main)
 
 ## Prima installazione
 
