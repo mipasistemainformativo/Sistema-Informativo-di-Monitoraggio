@@ -2,10 +2,36 @@
 # Script: 06_render_dashboard_SIM_integrata.R
 #
 # Avvia una shell SIM unica e, in processi separati, le dashboard
-# Conto annuale e PA Digitale 2026.
+# Conto annuale, PA Digitale 2026, ANAC, PagoPA.
 # ............................................................. #
 
 rm(list = ls())
+
+# ---------------------------------------------------------------------------
+# 0) INSTALLAZIONE AUTOMATICA DEI PACCHETTI MANCANTI
+#    Se un pacchetto non è installato, il render lo installa da solo:
+#    l'utente finale (es. ISTAT) non deve piu' eseguire a mano
+#    install.packages() prima del primo avvio.
+# ---------------------------------------------------------------------------
+required_packages <- c(
+  "callr", "googledrive", "rmarkdown", "flexdashboard", "shiny",
+  "dplyr", "tidyr", "stringr", "readr", "readxl", "jsonlite",
+  "tibble", "plotly", "DT", "leaflet", "sf", "htmltools", "janitor",
+  "openxlsx", "purrr", "lubridate",
+  "ggplot2", "giscoR", "scales"
+)
+
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+
+if (length(missing_packages) > 0L) {
+  message(
+    "Pacchetti mancanti, installazione in corso: ",
+    paste(missing_packages, collapse = ", ")
+  )
+  install.packages(missing_packages)
+}
 
 source("03_Scripts/00_config.R")
 source("03_Scripts/00_drive_helpers.R")
@@ -17,11 +43,13 @@ suppressPackageStartupMessages({
   library(rmarkdown)
 })
 
-# googledrive::drive_auth(scopes = "https://www.googleapis.com/auth/drive")
+# Autenticazione Drive: SEMPRE tramite browser, nessuna cache riutilizzata.
+# NOTA: richiede una sessione interattiva funzionante ad ogni avvio
+# (non adatta a lanci "doppio click" senza console visibile).
+googledrive::drive_deauth()
 googledrive::drive_auth(
   scopes = "https://www.googleapis.com/auth/drive",
-  cache = ".secrets",
-  email = TRUE
+  cache = FALSE
 )
 
 # 1) PARAMETRI DA CONFIGURARE -------------------------------------------------- 
@@ -36,17 +64,53 @@ FILE_ANAC <- file.path("03_Scripts", "ANAC", "05_dashboard_SIM_ANAC.Rmd")
 # Conto Annuale
 # Per cambiare dashboard CA, modifica solo questo nome file.
 NOME_DASHBOARD_CONTO_ANNUALE <- "05_dashboard_SIM_ContoAnnuale_v4.Rmd"
-
-FILE_CONTO_ANNUALE <- file.path(
-  "03_Scripts","Conto_annuale",
-  NOME_DASHBOARD_CONTO_ANNUALE
-  )
+FILE_CONTO_ANNUALE <- file.path("03_Scripts","Conto_annuale", NOME_DASHBOARD_CONTO_ANNUALE)
 
 PORT_HOME <- 8010L
 PORT_CONTO_ANNUALE <- 8011L
 PORT_PADIGITALE <- 8012L
 PORT_INDICATORS_PAGOPA <- 8013L
 PORT_ANAC <- 8014L
+
+# ---------------------------------------------------------------------------
+# Libera automaticamente una porta se occupata da un processo di un
+# lancio precedente non chiuso correttamente (funziona su Windows e Mac).
+# Risolve l'errore "createTcpServer: address already in use".
+# ---------------------------------------------------------------------------
+free_port_if_busy <- function(port) {
+  is_windows <- .Platform$OS.type == "windows"
+
+  if (is_windows) {
+    out <- tryCatch(
+      system(paste0("netstat -ano | findstr :", port), intern = TRUE),
+      error = function(e) character(0),
+      warning = function(w) character(0)
+    )
+    pids <- unique(na.omit(suppressWarnings(
+      as.integer(sub(".*\\s(\\d+)\\s*$", "\\1", out))
+    )))
+    for (pid in pids) {
+      message("Porta ", port, " occupata (PID ", pid, ") — libero la porta.")
+      system(paste("taskkill /F /PID", pid), ignore.stdout = TRUE, ignore.stderr = TRUE)
+    }
+  } else {
+    out <- tryCatch(
+      system(paste0("lsof -ti tcp:", port), intern = TRUE),
+      error = function(e) character(0),
+      warning = function(w) character(0)
+    )
+    for (pid in unique(out)) {
+      message("Porta ", port, " occupata (PID ", pid, ") — libero la porta.")
+      system(paste("kill -9", pid), ignore.stdout = TRUE, ignore.stderr = TRUE)
+    }
+  }
+
+  if (length(out) > 0L) Sys.sleep(1)
+}
+
+for (p in c(PORT_HOME, PORT_CONTO_ANNUALE, PORT_PADIGITALE, PORT_INDICATORS_PAGOPA, PORT_ANAC)) {
+  free_port_if_busy(p)
+}
 
 # Lista di perimetro comune. Il percorso stabile è definito in 00_config.R.
 DRIVE_MASTER_PA_FILE <- DRIVE_FILE_LISTA_RACCORDO_SIM
@@ -158,66 +222,6 @@ download_file_from_run_integrata <- function(run_folder, filename, local_name = 
   
   normalizePath(local_path, winslash = "/", mustWork = TRUE)
 }
-
-# run_rmd_child <- function(
-#     file,
-#     port,
-#     params = list(),
-#     app_name
-# ) {
-#   stdout_file <- file.path(
-#     DIR_LOGS,
-#     paste0(app_name, "_stdout.log")
-#   )
-#   
-#   stderr_file <- file.path(
-#     DIR_LOGS,
-#     paste0(app_name, "_stderr.log")
-#   )
-#   
-#   proc <- callr::r_bg(
-#     func = function(file, port, params, root) {
-#       setwd(root)
-#       
-#       rmarkdown::run(
-#         file = file,
-#         shiny_args = list(
-#           host = "127.0.0.1",
-#           port = port,
-#           launch.browser = FALSE
-#         ),
-#         render_args = list(
-#           params = params,
-#           knit_root_dir = root,
-#           envir = new.env(parent = globalenv())
-#         )
-#       )
-#     },
-#     args = list(
-#       file = normalizePath(
-#         file,
-#         winslash = "/",
-#         mustWork = TRUE
-#       ),
-#       port = port,
-#       params = params,
-#       root = normalizePath(
-#         getwd(),
-#         winslash = "/",
-#         mustWork = TRUE
-#       )
-#     ),
-#     stdout = stdout_file,
-#     stderr = stderr_file,
-#     supervise = TRUE
-#   )
-#   
-#   attr(proc, "app_name") <- app_name
-#   attr(proc, "stdout_file") <- stdout_file
-#   attr(proc, "stderr_file") <- stderr_file
-#   
-#   proc
-# }
 
 run_rmd_child <- function(
     file,
