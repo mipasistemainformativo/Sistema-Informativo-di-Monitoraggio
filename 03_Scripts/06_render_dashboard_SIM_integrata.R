@@ -49,7 +49,7 @@ suppressPackageStartupMessages({
 # (non adatta a lanci "doppio click" senza console visibile).
 googledrive::drive_deauth()
 googledrive::drive_auth(
-  scopes = "https://www.googleapis.com/auth/drive",
+  scopes = "https://www.googleapis.com/auth/drive.readonly",
   cache = FALSE
 )
 
