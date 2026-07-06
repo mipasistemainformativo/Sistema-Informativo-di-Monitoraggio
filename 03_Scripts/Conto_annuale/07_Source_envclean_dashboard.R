@@ -1,4 +1,4 @@
-source("03_Scripts/Conto_annuale/01_render_claude.R",
+source("03_Scripts/Conto_annuale/01_render_dash_SIM_CA_v4.R",
        echo = TRUE,
        max.deparse.length = Inf
 )
