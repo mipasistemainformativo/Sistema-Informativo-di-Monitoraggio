@@ -1,0 +1,27 @@
+\usepackage{graphicx}
+\usepackage{fancyhdr}
+
+\setlength{\headheight}{28pt}
+
+\pagestyle{fancy}
+\fancyhf{}
+
+\fancyhead[L]{%
+  \includegraphics[height=0.7cm]{logo-mipa.jpeg}%
+}
+
+\fancyhead[R]{Sistema Informativo di Monitoraggio}
+
+\fancyfoot[C]{\thepage}
+
+\renewcommand{\headrulewidth}{0.4pt}
+
+\fancypagestyle{plain}{%
+  \fancyhf{}
+  \fancyhead[L]{%
+    \includegraphics[height=0.7cm]{logo-mipa.jpeg}%
+  }
+  \fancyhead[R]{Sistema Informativo di Monitoraggio}
+  \fancyfoot[C]{\thepage}
+  \renewcommand{\headrulewidth}{0.4pt}
+}

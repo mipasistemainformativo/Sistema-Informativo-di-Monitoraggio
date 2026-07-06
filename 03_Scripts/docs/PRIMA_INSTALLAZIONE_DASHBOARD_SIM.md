@@ -1,3 +1,33 @@
+---
+title: null
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    self_contained: true
+  pdf_document:
+    toc: true
+    number_sections: true
+    latex_engine: xelatex
+    includes:
+      in_header: header.tex
+lang: it
+---
+
+```{=html}
+<div style="margin-top:50px;">
+
+  <div style="text-align:center; margin-bottom:35px;">
+    <img
+      src="logo-mipa.jpeg"
+      style="width:230px;"
+    >
+  </div>
+
+</div>
+```
+
 # Prima installazione della dashboard SIM
 
 Questa guida è pensata per chi non ha mai usato Git, R o RStudio.
@@ -139,7 +169,7 @@ File → New Project → Version Control → Git
 Nel campo **Repository URL** inserire:
 
 ```text
-https://github.com/gaiascarponi/Monitoraggio-PNRR.git
+https://github.com/mipasistemainformativo/Sistema-Informativo-di-Monitoraggio.git
 ```
 
 Nel campo **Project directory name** deve comparire:
