@@ -18,7 +18,6 @@ required_packages <- c(
   "dplyr", "tidyr", "stringr", "readr", "readxl", "jsonlite",
   "tibble", "plotly", "DT", "leaflet", "sf", "htmltools", "janitor",
   "openxlsx", "purrr", "lubridate",
-  # Aggiunti perche' usati dalle dashboard ma assenti dalla lista originale:
   "ggplot2", "giscoR", "scales"
 )
 
