@@ -1,3 +1,4 @@
+
 # ............................................................. #
 # Script: 06_render_dashboard_SIM_integrata.R
 #
@@ -6,32 +7,6 @@
 # ............................................................. #
 
 rm(list = ls())
-
-# ---------------------------------------------------------------------------
-# 0) INSTALLAZIONE AUTOMATICA DEI PACCHETTI MANCANTI
-#    Se un pacchetto non è installato, il render lo installa da solo:
-#    l'utente finale (es. ISTAT) non deve piu' eseguire a mano
-#    install.packages() prima del primo avvio.
-# ---------------------------------------------------------------------------
-required_packages <- c(
-  "callr", "googledrive", "rmarkdown", "flexdashboard", "shiny",
-  "dplyr", "tidyr", "stringr", "readr", "readxl", "jsonlite",
-  "tibble", "plotly", "DT", "leaflet", "sf", "htmltools", "janitor",
-  "openxlsx", "purrr", "lubridate",
-  "ggplot2", "giscoR", "scales"
-)
-
-missing_packages <- required_packages[
-  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
-]
-
-if (length(missing_packages) > 0L) {
-  message(
-    "Pacchetti mancanti, installazione in corso: ",
-    paste(missing_packages, collapse = ", ")
-  )
-  install.packages(missing_packages)
-}
 
 source("03_Scripts/00_config.R")
 source("03_Scripts/00_drive_helpers.R")
@@ -43,14 +18,12 @@ suppressPackageStartupMessages({
   library(rmarkdown)
 })
 
-# Autenticazione Drive: SEMPRE tramite browser, nessuna cache riutilizzata.
-# NOTA: richiede una sessione interattiva funzionante ad ogni avvio
-# (non adatta a lanci "doppio click" senza console visibile).
-googledrive::drive_deauth()
-googledrive::drive_auth(
-  scopes = "https://www.googleapis.com/auth/drive",
-  cache = FALSE
-)
+googledrive::drive_auth(scopes = "https://www.googleapis.com/auth/drive")
+#googledrive::drive_auth(
+#  scopes = "https://www.googleapis.com/auth/drive",
+#  cache = ".secrets",
+#  email = TRUE
+#)
 
 # 1) PARAMETRI DA CONFIGURARE -------------------------------------------------- 
 
@@ -62,7 +35,6 @@ FILE_INDICATORS_PAGOPA <- file.path("03_Scripts", "PagoPA", "05_dashboard_SIM_Pa
 FILE_ANAC <- file.path("03_Scripts", "ANAC", "05_dashboard_SIM_ANAC.Rmd")
 
 # Conto Annuale
-# Per cambiare dashboard CA, modifica solo questo nome file.
 NOME_DASHBOARD_CONTO_ANNUALE <- "05_dashboard_SIM_ContoAnnuale_v4.Rmd"
 
 FILE_CONTO_ANNUALE <- file.path(
@@ -81,10 +53,12 @@ DRIVE_MASTER_PA_FILE <- DRIVE_FILE_LISTA_RACCORDO_SIM
 
 # Path input to datasets used by fchildren
 # Conto Annuale - nuova dashboard
-DRIVE_DIR_DATASET <- "01_Dataset"
-DRIVE_DIR_INDICATORS <- file.path(DRIVE_DIR_DATASET, "Indicators")
+#DRIVE_DIR_DATASET <- "01_Dataset"
+#DRIVE_DIR_INDICATORS <- file.path(DRIVE_DIR_DATASET, "Indicators")
 DRIVE_CA_INDICATORS <- file.path(DRIVE_DIR_INDICATORS, "Conto_annuale")
-DRIVE_CA_DASHBOARD_CATALOG <- file.path(DRIVE_CA_INDICATORS, "Dashboard")
+#DRIVE_CA_DASHBOARD_CATALOG <- file.path(DRIVE_CA_INDICATORS, "Dashboard")
+DRIVE_CA_DASHBOARD_CATALOG <- googledrive::as_id("16_ptNfOkj-APoYcpfx_pcKnomAJcYZ45")
+
 
 # PA Digitale.
 DRIVE_PAD_INDICATORS <- file.path(DRIVE_DIR_INDICATORS_PAD26, RUN_ID_PADIGITALE)
@@ -148,67 +122,6 @@ download_exact <- function(folder, filename) {
   normalizePath(local_path, winslash = "/", mustWork = TRUE)
 }
 
-# ---------------------------------------------------------------------------
-# Controlla che il file .Rmd abbia davvero, nel suo YAML, tutti i parametri
-# che stiamo per passargli. Se manca qualcosa (es. file locale non aggiornato
-# rispetto alla repository), lo script si ferma SUBITO con un messaggio
-# chiaro, invece di far fallire la dashboard figlia con uno stack trace
-# criptico dentro al browser.
-# ---------------------------------------------------------------------------
-validate_rmd_params <- function(file, params, app_name) {
-  declared <- names(rmarkdown::yaml_front_matter(file)$params)
-  requested <- names(params)
-  missing_in_yaml <- setdiff(requested, declared)
-
-  if (length(missing_in_yaml) > 0L) {
-    stop(
-      "Il file '", basename(file), "' (dashboard '", app_name, "') non e' aggiornato: ",
-      "mancano nell'intestazione YAML i seguenti parametri: ",
-      paste(missing_in_yaml, collapse = ", "), ".\n",
-      "SOLUZIONE: aprire la scheda Git in RStudio, premere 'Pull' per scaricare ",
-      "l'ultima versione della repository, e rilanciare lo script. ",
-      "Se il problema persiste, cancellare l'intera cartella del progetto e riclonarla da zero.",
-      call. = FALSE
-    )
-  }
-}
-
-# ---------------------------------------------------------------------------
-# Libera una porta se occupata da un processo di un lancio precedente
-# non chiuso correttamente (funziona su Windows e Mac).
-# Risolve l'errore "createTcpServer: address already in use".
-# ---------------------------------------------------------------------------
-kill_port <- function(port) {
-  is_windows <- .Platform$OS.type == "windows"
-
-  if (is_windows) {
-    out <- tryCatch(
-      system(paste0("netstat -ano | findstr :", port), intern = TRUE),
-      error = function(e) character(0),
-      warning = function(w) character(0)
-    )
-    pids <- unique(na.omit(suppressWarnings(
-      as.integer(sub(".*\\s(\\d+)\\s*$", "\\1", out))
-    )))
-    for (pid in pids) {
-      message("Porta ", port, " occupata (PID ", pid, ") — libero la porta.")
-      system(paste("taskkill /F /PID", pid), ignore.stdout = TRUE, ignore.stderr = TRUE)
-    }
-  } else {
-    out <- tryCatch(
-      system(paste0("lsof -ti tcp:", port), intern = TRUE),
-      error = function(e) character(0),
-      warning = function(w) character(0)
-    )
-    for (pid in unique(out)) {
-      message("Porta ", port, " occupata (PID ", pid, ") — libero la porta.")
-      system(paste("kill -9", pid), ignore.stdout = TRUE, ignore.stderr = TRUE)
-    }
-  }
-
-  if (length(out) > 0L) Sys.sleep(1)
-}
-
 find_latest_run_folder <- function(drive_folder_rel) {
   folder <- googledrive::drive_get(path = drive_folder_rel)
   
@@ -247,6 +160,66 @@ download_file_from_run_integrata <- function(run_folder, filename, local_name = 
   
   normalizePath(local_path, winslash = "/", mustWork = TRUE)
 }
+
+# run_rmd_child <- function(
+#     file,
+#     port,
+#     params = list(),
+#     app_name
+# ) {
+#   stdout_file <- file.path(
+#     DIR_LOGS,
+#     paste0(app_name, "_stdout.log")
+#   )
+#   
+#   stderr_file <- file.path(
+#     DIR_LOGS,
+#     paste0(app_name, "_stderr.log")
+#   )
+#   
+#   proc <- callr::r_bg(
+#     func = function(file, port, params, root) {
+#       setwd(root)
+#       
+#       rmarkdown::run(
+#         file = file,
+#         shiny_args = list(
+#           host = "127.0.0.1",
+#           port = port,
+#           launch.browser = FALSE
+#         ),
+#         render_args = list(
+#           params = params,
+#           knit_root_dir = root,
+#           envir = new.env(parent = globalenv())
+#         )
+#       )
+#     },
+#     args = list(
+#       file = normalizePath(
+#         file,
+#         winslash = "/",
+#         mustWork = TRUE
+#       ),
+#       port = port,
+#       params = params,
+#       root = normalizePath(
+#         getwd(),
+#         winslash = "/",
+#         mustWork = TRUE
+#       )
+#     ),
+#     stdout = stdout_file,
+#     stderr = stderr_file,
+#     supervise = TRUE
+#   )
+#   
+#   attr(proc, "app_name") <- app_name
+#   attr(proc, "stdout_file") <- stdout_file
+#   attr(proc, "stderr_file") <- stderr_file
+#   
+#   proc
+# }
 
 run_rmd_child <- function(
     file,
@@ -332,94 +305,9 @@ run_rmd_child <- function(
   proc
 }
 
-# ---------------------------------------------------------------------------
-# Variante di run_rmd_child che passa gli input tramite variabili d'ambiente
-# invece che tramite 'params' YAML. Usata solo per Conto Annuale: su alcune
-# installazioni Windows, il meccanismo 'params' genera l'errore interno
-# "render params not declared in YAML" dentro al ciclo reattivo di Shiny.
-# Le variabili d'ambiente bypassano del tutto quel meccanismo.
-# ---------------------------------------------------------------------------
-run_rmd_child_env <- function(
-    file,
-    port,
-    env_vars = list(),
-    app_name
-) {
-  stdout_file <- file.path(DIR_LOGS, paste0(app_name, "_stdout.log"))
-  stderr_file <- file.path(DIR_LOGS, paste0(app_name, "_stderr.log"))
-  
-  pandoc_path <- Sys.getenv("RSTUDIO_PANDOC")
-  
-  proc <- callr::r_bg(
-    func = function(file, port, root, pandoc_path, env_vars) {
-      setwd(root)
-      
-      if (nzchar(pandoc_path)) {
-        Sys.setenv(RSTUDIO_PANDOC = pandoc_path)
-      }
-      
-      do.call(Sys.setenv, env_vars)
-      
-      message("Dashboard figlia: ", basename(file))
-      message("Working directory figlio: ", getwd())
-      message("RSTUDIO_PANDOC figlio: ", Sys.getenv("RSTUDIO_PANDOC"))
-      message("Pandoc disponibile figlio: ", rmarkdown::pandoc_available())
-      
-      if (!rmarkdown::pandoc_available()) {
-        stop(
-          paste("Pandoc non trovato.", "Installare RStudio oppure Quarto."),
-          call. = FALSE
-        )
-      }
-      
-      message("Pandoc versione figlio: ", as.character(rmarkdown::pandoc_version()))
-      
-      rmarkdown::run(
-        file = file,
-        shiny_args = list(
-          host = "127.0.0.1",
-          port = port,
-          launch.browser = FALSE
-        ),
-        render_args = list(
-          knit_root_dir = root,
-          envir = new.env(parent = globalenv())
-        )
-      )
-    },
-    args = list(
-      file = normalizePath(file, winslash = "/", mustWork = TRUE),
-      port = port,
-      root = normalizePath(getwd(), winslash = "/", mustWork = TRUE),
-      pandoc_path = pandoc_path,
-      env_vars = env_vars
-    ),
-    stdout = stdout_file,
-    stderr = stderr_file,
-    supervise = TRUE
-  )
-  
-  attr(proc, "app_name") <- app_name
-  attr(proc, "stdout_file") <- stdout_file
-  attr(proc, "stderr_file") <- stderr_file
-  
-  proc
-}
-
 
 status_run <- "failed"
 children <- list()
-
-# Libera eventuali porte rimaste occupate da esecuzioni precedenti
-# (fatto qui cosi' finisce anche nel file di log, gia' attivo da questo punto).
-ports <- c(
-  PORT_HOME,
-  PORT_CONTO_ANNUALE,
-  PORT_PADIGITALE,
-  PORT_INDICATORS_PAGOPA,
-  PORT_ANAC
-)
-invisible(lapply(ports, kill_port))
 
 tryCatch({
   master_pa <- download_drive_file(DRIVE_MASTER_PA_FILE)
@@ -474,28 +362,15 @@ tryCatch({
     file_fact_ca_trend = download_file_from_run_integrata(latest_catalog_run, "FACT_CA_TREND.rds")
   )
   
-  ca_env_vars <- list(
-    SIM_CA_FILE_FACT_DASHBOARD = ca_files$file_fact_ca_dashboard,
-    SIM_CA_FILE_DASH_SECTIONS = ca_files$file_dash_sections_ca,
-    SIM_CA_FILE_DASH_FILTERS = ca_files$file_dash_filters_ca,
-    SIM_CA_FILE_DASH_INDICATORS = ca_files$file_dash_indicators_ca,
-    SIM_CA_FILE_FACT_COVERAGE = ca_files$file_fact_ca_coverage,
-    SIM_CA_FILE_FACT_REGIONE = ca_files$file_fact_ca_regione,
-    SIM_CA_FILE_FACT_ZONA = ca_files$file_fact_ca_zona,
-    SIM_CA_FILE_FACT_FG = ca_files$file_fact_ca_fg,
-    SIM_CA_FILE_FACT_TIPOLOGIA = ca_files$file_fact_ca_tipologia,
-    SIM_CA_FILE_FACT_TREND = ca_files$file_fact_ca_trend,
-    SIM_CA_RUN_ID_INDICATORI = run_id_indicatori_ca,
-    SIM_CA_RUN_ID_CATALOGO = run_id_catalogo_ca
+  ca_params <- c(
+    ca_files,
+    list(
+      run_id_indicatori_ca = run_id_indicatori_ca,
+      run_id_catalogo_ca = run_id_catalogo_ca
+    )
   )
 
-  # Verifica preventiva per le altre 3 dashboard (invariate, usano ancora
-  # il meccanismo params standard, che su queste non ha mai dato problemi).
-  validate_rmd_params(FILE_PADIGITALE, pad_params, "padigitale")
-  validate_rmd_params(FILE_INDICATORS_PAGOPA, my_indicators_params, "indicators_pagopa")
-  validate_rmd_params(FILE_ANAC, anac_params, "anac")
-
-  children$conto_annuale <- run_rmd_child_env(file = FILE_CONTO_ANNUALE, port = PORT_CONTO_ANNUALE, env_vars = ca_env_vars, app_name = "conto_annuale")
+  children$conto_annuale <- run_rmd_child(file = FILE_CONTO_ANNUALE, port = PORT_CONTO_ANNUALE, params = ca_params, app_name = "conto_annuale")
   children$padigitale <- run_rmd_child(file = FILE_PADIGITALE, port = PORT_PADIGITALE, params = pad_params, app_name = "padigitale")
   children$indicators_pagopa <- run_rmd_child( file = FILE_INDICATORS_PAGOPA, port = PORT_INDICATORS_PAGOPA, params = my_indicators_params, app_name = "indicators_pagopa")
   children$anac <- run_rmd_child(file = FILE_ANAC, port = PORT_ANAC, params = anac_params, app_name = "anac")
