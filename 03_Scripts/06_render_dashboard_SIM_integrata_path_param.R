@@ -31,7 +31,11 @@ if (length(missing_packages) > 0L) {
     "Pacchetti mancanti, installazione in corso: ",
     paste(missing_packages, collapse = ", ")
   )
-  install.packages(missing_packages)
+  install.packages(
+    missing_packages,
+    dependencies = TRUE,
+    repos = "https://cloud.r-project.org/"
+  )
 }
 
 source("03_Scripts/00_config.R")
