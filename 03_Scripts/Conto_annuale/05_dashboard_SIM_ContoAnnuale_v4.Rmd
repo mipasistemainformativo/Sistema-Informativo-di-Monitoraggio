@@ -7,19 +7,6 @@ output:
     theme: flatly
     self_contained: false
 runtime: shiny
-params:
-  file_fact_ca_dashboard: null
-  file_dash_sections_ca: null
-  file_dash_filters_ca: null
-  file_dash_indicators_ca: null
-  file_fact_ca_coverage: null
-  file_fact_ca_regione: null
-  file_fact_ca_zona: null
-  file_fact_ca_fg: null
-  file_fact_ca_tipologia: null
-  file_fact_ca_trend: null
-  run_id_indicatori_ca: null
-  run_id_catalogo_ca: null
 ---
 
 ```{r setup, include=FALSE}
@@ -92,22 +79,26 @@ read_rds_param <- function(path, label) {
   readRDS(validate_local_rds(path, label)) |> tibble::as_tibble()
 }
 
-# Parametri copiati in un oggetto ordinario, così il codice reattivo non richiama direttamente params.
+# Parametri letti da variabili d'ambiente (impostate dal render prima di
+# avviare questa dashboard) invece che da 'params' — questo evita del tutto
+# il meccanismo interno di rmarkdown/knitr che su alcune installazioni
+# Windows genera l'errore "render params not declared in YAML".
 dashboard_params_ca <- list(
-  file_fact_ca_dashboard = params$file_fact_ca_dashboard,
-  file_dash_sections_ca = params$file_dash_sections_ca,
-  file_dash_filters_ca = params$file_dash_filters_ca,
-  file_dash_indicators_ca = params$file_dash_indicators_ca,
-  file_fact_ca_coverage = params$file_fact_ca_coverage,
-  file_fact_ca_regione = params$file_fact_ca_regione,
-  file_fact_ca_zona = params$file_fact_ca_zona,
-  file_fact_ca_fg = params$file_fact_ca_fg,
-  file_fact_ca_tipologia = params$file_fact_ca_tipologia,
-  file_fact_ca_trend = params$file_fact_ca_trend,
-  run_id_indicatori_ca = params$run_id_indicatori_ca %||% "non specificato",
-  run_id_catalogo_ca = params$run_id_catalogo_ca %||% "non specificato"
+  file_fact_ca_dashboard = Sys.getenv("SIM_CA_FILE_FACT_DASHBOARD"),
+  file_dash_sections_ca = Sys.getenv("SIM_CA_FILE_DASH_SECTIONS"),
+  file_dash_filters_ca = Sys.getenv("SIM_CA_FILE_DASH_FILTERS"),
+  file_dash_indicators_ca = Sys.getenv("SIM_CA_FILE_DASH_INDICATORS"),
+  file_fact_ca_coverage = Sys.getenv("SIM_CA_FILE_FACT_COVERAGE"),
+  file_fact_ca_regione = Sys.getenv("SIM_CA_FILE_FACT_REGIONE"),
+  file_fact_ca_zona = Sys.getenv("SIM_CA_FILE_FACT_ZONA"),
+  file_fact_ca_fg = Sys.getenv("SIM_CA_FILE_FACT_FG"),
+  file_fact_ca_tipologia = Sys.getenv("SIM_CA_FILE_FACT_TIPOLOGIA"),
+  file_fact_ca_trend = Sys.getenv("SIM_CA_FILE_FACT_TREND"),
+  run_id_indicatori_ca = Sys.getenv("SIM_CA_RUN_ID_INDICATORI") %||% "non specificato",
+  run_id_catalogo_ca = Sys.getenv("SIM_CA_RUN_ID_CATALOGO") %||% "non specificato"
 )
 ```
+
 
 ```{r import-data, include=FALSE}
 FACT_CA_DASHBOARD <- read_rds_param(dashboard_params_ca$file_fact_ca_dashboard, "FACT_CA_DASHBOARD")
