@@ -31,7 +31,11 @@ if (length(missing_packages) > 0L) {
     "Pacchetti mancanti, installazione in corso: ",
     paste(missing_packages, collapse = ", ")
   )
-  install.packages(missing_packages)
+  install.packages(
+    missing_packages,
+    dependencies = TRUE,
+    repos = "https://cloud.r-project.org/"
+  )
 }
 
 source("03_Scripts/00_config.R")
@@ -115,8 +119,46 @@ message("Pandoc padre disponibile: ", rmarkdown::pandoc_available())
 message("Pandoc padre versione: ", as.character(rmarkdown::pandoc_version()))
 message("RSTUDIO_PANDOC padre: ", Sys.getenv("RSTUDIO_PANDOC"))
 
+# ---------------------------------------------------------------------------
+# Risolve un percorso Drive (es. "01_Dataset/Indicators/Conto_annuale")
+# camminando le sottocartelle una alla volta a partire da un ID FISSO
+# (DRIVE_ROOT_ID, definito in 00_config.R), invece che cercare il percorso
+# per nome a partire dalla radice del Drive di chi si e' autenticato.
+#
+# Perche' serve: drive_get(path = "...") cerca a partire dal "My Drive"
+# dell'account autenticato. Se per quell'account la cartella e' visibile
+# solo come voce condivisa isolata (non annidata sotto lo stesso percorso),
+# la ricerca per nome fallisce con "Does not exist" anche se l'account ha
+# accesso al contenuto. Ancorandosi sempre allo stesso ID stabile, il
+# risultato e' identico per qualunque account, indipendentemente da come
+# Drive mostra quella cartella nell'interfaccia di quella persona.
+# ---------------------------------------------------------------------------
+resolve_drive_path <- function(path_rel, root_id = DRIVE_ROOT_ID) {
+  parts <- strsplit(path_rel, "/", fixed = TRUE)[[1]]
+  current <- googledrive::as_id(root_id)
+  
+  for (part in parts) {
+    children <- googledrive::drive_ls(current) |>
+      dplyr::filter(.data$name == part)
+    
+    if (nrow(children) == 0L) {
+      stop(
+        "Cartella '", part, "' non trovata (dentro il percorso '", path_rel, "'). ",
+        "L'account autenticato potrebbe non avere accesso a questa sottocartella: ",
+        "verificare che la condivisione includa l'intera catena di cartelle, ",
+        "non solo la cartella finale.",
+        call. = FALSE
+      )
+    }
+    
+    current <- children[1, ]
+  }
+  
+  current
+}
+
 find_latest_drive_file <- function(drive_folder_rel, pattern) {
-  folder <- drive_get(path = drive_folder_rel)
+  folder <- resolve_drive_path(drive_folder_rel)
   files <- drive_ls(folder) |>
     dplyr::filter(stringr::str_detect(.data$name, stringr::regex(pattern, ignore_case = TRUE))) |>
     dplyr::arrange(dplyr::desc(.data$name)) |>
@@ -211,7 +253,7 @@ kill_port <- function(port) {
 }
 
 find_latest_run_folder <- function(drive_folder_rel) {
-  folder <- googledrive::drive_get(path = drive_folder_rel)
+  folder <- resolve_drive_path(drive_folder_rel)
   
   runs <- googledrive::drive_ls(folder) |>
     dplyr::filter(stringr::str_detect(.data$name, "^\\d{8}_\\d{6}$")) |>
