@@ -1,0 +1,10 @@
+name: ANAC
+title:
+username: mipasistemainformativo
+account: mipasistemainformativo
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 17607998
+bundleId: 12262541
+url: https://mipasistemainformativo.shinyapps.io/ANAC/
+version: 1

@@ -1,0 +1,10 @@
+name: pagopa
+title:
+username: mipasistemainformativo
+account: mipasistemainformativo
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 17609542
+bundleId: 12266348
+url: https://mipasistemainformativo.shinyapps.io/pagopa/
+version: 1
