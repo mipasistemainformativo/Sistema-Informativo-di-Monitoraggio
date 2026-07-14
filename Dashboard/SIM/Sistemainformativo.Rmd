@@ -19,7 +19,7 @@ params:
   # gira in un container separato da quello delle app figlie.
   # Impostare a null finche' la relativa dashboard non e' stata deployata:
   # iframe_app() mostra automaticamente il placeholder "sezione non disponibile".
-  url_conto_annuale: "https://mipasistemainformativo.shinyapps.io/sim-conto-annuale-test/"
+  url_conto_annuale: "https://mipasistemainformativo.shinyapps.io/Conto_annuale/"
   url_padigitale: null
   url_indicators_pagopa: "https://mipasistemainformativo.shinyapps.io/PagoPA/"
   url_anac: "https://mipasistemainformativo.shinyapps.io/ANAC/"

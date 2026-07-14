@@ -5,6 +5,6 @@ account: mipasistemainformativo
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 17609593
-bundleId: 12264730
+bundleId: 12267090
 url: https://mipasistemainformativo.shinyapps.io/sistemainformativo/
 version: 1
