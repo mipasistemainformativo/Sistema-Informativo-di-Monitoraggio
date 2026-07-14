@@ -4,20 +4,45 @@ suppressPackageStartupMessages({
   library(rsconnect)
 })
 
-# Cartella che contiene questo script
-app_dir <- normalizePath(
-  getwd(),
-  winslash = "/",
-  mustWork = TRUE
+# Individua automaticamente la cartella in cui si trova questo script.
+script_file <- tryCatch(
+  sys.frame(1)$ofile,
+  error = function(e) NULL
 )
 
-# Controllo struttura minima
+if (!is.null(script_file) && nzchar(script_file)) {
+  app_dir <- dirname(
+    normalizePath(
+      script_file,
+      winslash = "/",
+      mustWork = TRUE
+    )
+  )
+} else {
+  # Fallback da usare se lo script viene eseguito con Source in RStudio.
+  app_dir <- normalizePath(
+    file.path(
+      getwd(),
+      "Dashboard",
+      "Conto_annuale"
+    ),
+    winslash = "/",
+    mustWork = TRUE
+  )
+}
+
+message("Cartella dell'app: ", app_dir)
+
+# 2. Controllo struttura minima ----
+
 required_files <- c(
   file.path(app_dir, "Conto_annuale_app.Rmd"),
   file.path(app_dir, "data")
 )
 
-missing_files <- required_files[!file.exists(required_files)]
+missing_files <- required_files[
+  !file.exists(required_files)
+]
 
 if (length(missing_files) > 0L) {
   stop(
@@ -27,7 +52,7 @@ if (length(missing_files) > 0L) {
   )
 }
 
-# 2. Repository pacchetti ----
+# 3. Repository pacchetti ----
 
 options(
   repos = c(
@@ -35,12 +60,16 @@ options(
   )
 )
 
-# 3. Deploy su shinyapps.io ----
+# 4. Deploy su shinyapps.io ----
 
 rsconnect::deployApp(
   appDir = app_dir,
   appPrimaryDoc = "Conto_annuale_app.Rmd",
-  appName = "Conto_annuale",
+  
+  # Usa lo stesso nome dell'app già pubblicata
+  # per mantenere invariato il link.
+  appName = "ContoAnnuale",
+  
   forceUpdate = TRUE,
   launch.browser = TRUE
 )
