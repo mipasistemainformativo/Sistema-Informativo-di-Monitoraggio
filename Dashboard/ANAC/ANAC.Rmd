@@ -315,7 +315,7 @@ renderValueBox({
 Row {data-height=400}
 -----------------------------------------------------------------------
   
-### Top 5 settori per valore economico (€)
+### Top 5 settori per valore economico - importo di lotto (€)
   
 ```{r}
 renderPlotly({
@@ -329,8 +329,6 @@ renderPlotly({
         paste0(round(v / 1e9, 1), " Mld")
       } else if (abs_v >= 1e6) {
         paste0(round(v / 1e6, 1), " Mil")
-      } else if (abs_v >= 1e3) {
-        paste0(round(v / 1e3, 1), " K")
       } else {
         as.character(round(v, 0))
       }
@@ -353,17 +351,18 @@ renderPlotly({
       labels = format_ita,
       expand = expansion(mult = c(0, 0.05))
     ) +
-    labs(x = NULL, y = "Importo totale")
+    labs(x = NULL, y = "Importo di lotto")
   
   ggplotly(p) %>% 
     layout(
       margin = list(l = 150),
-      yaxis = list(tickformat = ",.0f")
+      yaxis = list(tickformat = ",.0f"),
+      xaxis = list(dtick = 1e10)
     )
 })
 ```
 
-### Top 5 settori per volume di gara (n)
+### Top 5 settori per numero di gare (n)
 
 ```{r}
 renderPlotly({
@@ -376,8 +375,6 @@ renderPlotly({
         paste0(round(v / 1e9, 1), " Mld")
       } else if (abs_v >= 1e6) {
         paste0(round(v / 1e6, 1), " Mil")
-      } else if (abs_v >= 1e3) {
-        paste0(round(v / 1e3, 1), " K")
       } else {
         as.character(round(v, 0))
       }
@@ -403,7 +400,7 @@ renderPlotly({
     labs(x = NULL, y = "Numero totale Gare")
   
   ggplotly(p) %>% 
-    layout(margin = list(l = 150))
+    layout(margin = list(l = 150), xaxis = list(dtick = 2500))
 })
 ```
 
@@ -458,35 +455,49 @@ helpText(
 )
 ```
 
-Row
+Row {data-height=800}
 -----------------------------------------------------------------------
   
 ### Mappa Distribuzione
   
 ```{r}
-plotOutput("mappa_anac", height = "800px")
 
-output$mappa_anac <- renderPlot({
+plotlyOutput("mappa_anac", height = "800px")
+
+output$mappa_anac <- renderPlotly({
   req_df <- df_anac_reg %>% filter(fil_val == input$anno_reg, ind == input$ind_reg)
   if (input$ind_reg %in% c("ind21","ind22","ind25","ind26","ind27","ind29","ind30","ind31")) {
     req_df <- req_df %>% filter(sub_fil_val == input$mese_reg)
   }
   shiny::validate(shiny::need(nrow(req_df) > 0, "Dati non disponibili."))
+
   mappa_final <- regioni_shape %>% left_join(req_df, by = c("reg_code" = "codice_reg"))
   valori_validi <- mappa_final$ind_val[!is.na(mappa_final$ind_val)]
   shiny::validate(shiny::need(length(valori_validi) > 0, "Nessun valore disponibile per questa selezione."))
+
   etichetta_ind <- unname(nomi_indicatori_reg[input$ind_reg])
-  ggplot(mappa_final) +
-    geom_sf(aes(fill = ind_val), color = "white", linewidth = 0.35) +
+
+  mappa_final <- mappa_final %>%
+    mutate(
+      display_val = ifelse(is.na(ind_val), "Nessun dato",
+                            scales::label_number(big.mark = ".", decimal.mark = ",")(ind_val)),
+      tooltip_txt = paste0(reg_name, "\n", etichetta_ind, ": ", display_val)
+    )
+
+  p <- ggplot(mappa_final) +
+    geom_sf(aes(fill = ind_val, text = tooltip_txt), color = "white", linewidth = 0.35) +
     scale_fill_distiller(
-      palette = "YlGnBu", direction = 1, na.value = "#f0f0f0",
-      name = etichetta_ind, labels = scales::label_number(big.mark = ".", decimal.mark = ",")
+      palette = "YlGnBu", direction = 1, na.value = "#f0f0f0", name = etichetta_ind
     ) +
-    labs(caption = "Grigio: nessun dato") +
     theme_void() +
-    theme(legend.position = "bottom", plot.caption = element_text(hjust = 0.5))
+    theme(legend.position = "bottom")
+
+  ggplotly(p, tooltip = "text") |>
+    layout(legend = list(orientation = "h")) |>
+    config(displayModeBar = FALSE)
 })
 ```
+
 
 ### Classifica Regionale
 
@@ -501,7 +512,7 @@ renderPlotly({
   p <- ggplot(res_reg, aes(x = reorder(regione_bdap, ind_val), y = ind_val)) +
     geom_col(fill = "#5DADE2") + coord_flip() + theme_minimal() +
     labs(x = NULL, y = etichetta_ind)
-  ggplotly(p) %>% layout(margin = list(l = 150))
+  ggplotly(p) %>% layout(margin = list(l = 150), height = "1000px")
 })
 ```
 
@@ -575,7 +586,7 @@ helpText(
 )
 ```
 
-Row
+Row {data-height=800}
 -----------------------------------------------------------------------
   
 ### 
@@ -601,7 +612,7 @@ renderPlotly({
 ```
 
 
-Row {data-height=800}
+Row {data-height=700}
 -----------------------------------------------------------------------
   
 ### Confronto tra tutte le Forme Giuridiche
@@ -643,7 +654,7 @@ renderDT({
 ```
 
 
-Analisi di dettaglio mensile {data-icon="fa-calendar-alt"}
+Analisi di dettaglio {data-icon="fa-calendar-alt"}
 =======================================================================
   
 Sidebar {.sidebar}

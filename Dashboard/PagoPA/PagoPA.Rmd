@@ -463,25 +463,33 @@ helpText(
 
 Row {data-height=700}
 -----------------------------------------------------------------------
-
 ### Mappa Geografica
-
 ```{r}
-plotOutput("mappa_regioni", height = "600px")
-
-output$mappa_regioni <- renderPlot({
+plotlyOutput("mappa_regioni", height = "600px")
+output$mappa_regioni <- renderPlotly({
   dati_m <- df %>% filter(fil == "fil_reg", ind == input$sel_ind_reg)
   mf <- regioni_shape %>% left_join(dati_m, by = c("reg_code" = "fil_val"))
-  ggplot(mf) +
-    geom_sf(aes(fill = ind_val), color = "white", linewidth = 0.35) +
+
+  etichetta_ind <- unname(ind_regionali_map[input$sel_ind_reg])
+
+  mf <- mf %>%
+    mutate(
+      display_val = ifelse(is.na(ind_val), "Nessun dato",
+                            scales::label_number(big.mark = ".", decimal.mark = ",")(ind_val)),
+      tooltip_txt = paste0(reg_name, "\n", etichetta_ind, ": ", display_val)
+    )
+
+  p <- ggplot(mf) +
+    geom_sf(aes(fill = ind_val, text = tooltip_txt), color = "white", linewidth = 0.35) +
     scale_fill_distiller(
-      palette = "YlGnBu", direction = 1, na.value = "#f0f0f0",
-      name = unname(ind_regionali_map[input$sel_ind_reg]),
-      labels = scales::label_number(big.mark = ".", decimal.mark = ",")
+      palette = "YlGnBu", direction = 1, na.value = "#f0f0f0", name = etichetta_ind
     ) +
-    labs(caption = "Grigio: nessun dato") +
     theme_void() +
-    theme(legend.position = "bottom", plot.caption = element_text(hjust = 0.5))
+    theme(legend.position = "bottom")
+
+  ggplotly(p, tooltip = "text") |>
+    layout(legend = list(orientation = "h")) |>
+    config(displayModeBar = FALSE)
 })
 ```
 
