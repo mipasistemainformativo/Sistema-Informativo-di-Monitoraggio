@@ -1,25 +1,23 @@
 # Sistema Informativo di Monitoraggio
 
-Repository pubblica del progetto **Sistema Informativo di Monitoraggio PA (SIM)**.
+Repository ufficiale del progetto **Sistema Informativo di Monitoraggio PA (SIM)**. 
 
-Il codice necessario per eseguire la dashboard si trova principalmente nella cartella `03_Scripts/`, su [GitHub](https://github.com/mipasistemainformativo/Sistema-Informativo-di-Monitoraggio/tree/main)
+L'ecosistema fornisce una visione integrata dei dati provenienti da diverse fonti nazionali (ANAC, PagoPA, Conto Annuale, PA Digitale 2026) per monitorare l'evoluzione digitale e amministrativa degli enti nel perimetro MPA.
 
-## Prima installazione
+## 🚀 Accesso Rapido 
 
-Chi non ha ancora scaricato e configurato il progetto deve seguire:
+Per una consultazione immediata senza installare software, le dashboard sono accessibili al seguente link: [Sistema Informativo di Monitoraggio]("metterelink")
+La guida copre l'installazione di R, RStudio, Git e la configurazione delle librerie necessarie 
 
-su GitHub:
-```text
-docs/PRIMA_INSTALLAZIONE_DASHBOARD_SIM.md
-```
-Allegato rapporto finale:
-```text
-All_5b_PRIMA_INSTALLAZIONE_DASHBOARD_SIM.pdf
-```
+## 🛠️ Installazione e Sviluppo Locale
+
+### Prima installazione
+
+Se è la prima volta che utilizzi il progetto sul tuo computer, consulta il [Manuale utende Dashboard SIM (PDF)](/Manuale%20Utente%20Dashboard%20SIM.pdf)
 
 La guida spiega come installare R, RStudio e Git, clonare la repository pubblica, installare i pacchetti R e avviare la dashboard per la prima volta.
 
-## Avvio rapido — solo dopo la prima installazione
+### Avvio rapido — dopo la prima installazione
 
 Questi passaggi valgono quando la repository è già presente e configurata sul computer.
 
