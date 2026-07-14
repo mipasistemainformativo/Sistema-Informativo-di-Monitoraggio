@@ -31,5 +31,5 @@ config.yml
 .secrets
 
 #Dati Shiny.io
-Dashboard/**/*.rds
+#Dashboard/**/*.rds
 Dashboard/**/*.json
