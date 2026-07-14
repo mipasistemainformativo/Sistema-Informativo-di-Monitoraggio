@@ -7,6 +7,7 @@ L'ecosistema fornisce una visione integrata dei dati provenienti da diverse font
 ## 🚀 Accesso Rapido 
 
 Per una consultazione immediata senza installare software, le dashboard sono accessibili al seguente link: [Sistema Informativo di Monitoraggio]("metterelink")
+
 La guida copre l'installazione di R, RStudio, Git e la configurazione delle librerie necessarie 
 
 ## 🛠️ Installazione e Sviluppo Locale
