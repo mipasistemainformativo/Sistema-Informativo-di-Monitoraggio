@@ -735,32 +735,66 @@ Row
 
 <div class="sim-card">
 <h3>Conto annuale</h3>
-<p>Personale, struttura demografica, turnover, formazione e copertura degli enti.</p>
-<p class="sim-muted">Apri la sezione dedicata dalla barra di navigazione.</p>
+
+<p><strong>Ente titolare:</strong> Ministero dell'Economia e delle Finanze – Ragioneria Generale dello Stato.</p>
+
+<p><strong>Informazioni disponibili:</strong> dati sul personale delle amministrazioni pubbliche, tra cui numero di dipendenti, assunzioni, cessazioni, età, anzianità, titolo di studio, formazione, retribuzioni e costo del lavoro.</p>
+
+<p><strong>Periodicità e produzione:</strong> dati annuali prodotti attraverso il Sistema Conoscitivo del personale dipendente delle amministrazioni pubbliche (SICO).</p>
+
+<p class="sim-muted">
+La dashboard consente di consultare gli indicatori elaborati per ente, territorio, tipologia amministrativa e periodo.
+</p>
 </div>
 
 ### PA Digitale 2026
 
 <div class="sim-card">
 <h3>PA Digitale 2026</h3>
-<p>Candidature finanziate, importi, misure e distribuzione territoriale.</p>
-<p class="sim-muted">La dashboard esistente resta un'applicazione autonoma.</p>
+
+<p><strong>Ambito:</strong> monitoraggio degli interventi di digitalizzazione della Pubblica Amministrazione.</p>
+
+<p><strong>Informazioni disponibili:</strong> candidature finanziate, importi, misure e distribuzione territoriale degli interventi.</p>
+
+<p><strong>Produzione degli indicatori:</strong> gli indicatori sono costruiti a partire dai dati amministrativi disponibili nel sistema.</p>
+
+<p class="sim-muted">
+La dashboard consente di analizzare gli interventi per misura, territorio e amministrazione.
+</p>
 </div>
 
 ### PagoPA
 
 <div class="sim-card">
 <h3>PagoPA</h3>
-<p>Transazioni, categorie di enti e fasce di importo dei pagamenti.</p>
-<p class="sim-muted">La dashboard esistente resta un'applicazione autonoma.</p>
+
+<p><strong>Ambito:</strong> pagamenti effettuati tramite la piattaforma PagoPA.</p>
+
+<p><strong>Informazioni disponibili:</strong> transazioni, importi, categorie di enti e distribuzione territoriale dei pagamenti.</p>
+
+<p><strong>Produzione degli indicatori:</strong> gli indicatori sono elaborati a partire dai flussi amministrativi disponibili.</p>
+
+<p class="sim-muted">
+La dashboard consente di confrontare gli enti, le categorie amministrative, le fasce di importo e la distribuzione territoriale.
+</p>
 </div>
 
 ### ANAC
 
 <div class="sim-card">
 <h3>ANAC — Monitoraggio Appalti</h3>
-<p>Gare, aggiudicazioni, importi, distribuzione regionale e confronto per forma giuridica e settore CPV.</p>
-<p class="sim-muted">Apri la sezione dedicata dalla barra di navigazione.</p>
+
+<p><strong>Ente titolare:</strong> Autorità Nazionale Anticorruzione.</p>
+
+<p><strong>Fonte:</strong> Banca Dati Nazionale dei Contratti Pubblici.</p>
+
+<p><strong>Informazioni disponibili:</strong> gare, aggiudicazioni, importi, stazioni appaltanti, operatori economici e classificazioni CPV.</p>
+
+<p><strong>Periodicità:</strong> aggiornamento continuativo dei dati comunicati dalle stazioni appaltanti.</p>
+
+<p class="sim-muted">
+La dashboard consente analisi territoriali e confronti per forma giuridica e settore CPV.
+</p>
 </div>
 
 Conto annuale {data-icon="fa-users"}
