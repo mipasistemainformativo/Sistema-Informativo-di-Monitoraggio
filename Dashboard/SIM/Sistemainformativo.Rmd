@@ -20,7 +20,7 @@ params:
   # Impostare a null finche' la relativa dashboard non e' stata deployata:
   # iframe_app() mostra automaticamente il placeholder "sezione non disponibile".
   url_conto_annuale: "https://mipasistemainformativo.shinyapps.io/Conto_annuale/"
-  url_padigitale: null
+  url_padigitale: "/private/var/folders/24/bqbcz15n3d97c57dr0_sybnr0000gn/T/RtmpmCEYzT/file160357cfb82c3/PAdigitale2026.html"
   url_indicators_pagopa: "https://mipasistemainformativo.shinyapps.io/PagoPA/"
   url_anac: "https://mipasistemainformativo.shinyapps.io/ANAC/"
 
