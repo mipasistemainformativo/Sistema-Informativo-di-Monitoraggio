@@ -13,7 +13,18 @@ rsconnect::deployApp(
 )
 ```
 
-# 2. Dashboard ANAC
+# 2. Dashboard Conto Annuale
+```r
+rsconnect::deployApp(
+  appDir = "Conto_annuale",
+  appPrimaryDoc = "Conto_annuale_app.Rmd",
+  appName = "ContoAnnuale",
+  forceUpdate = TRUE,
+  launch.browser = TRUE
+)
+```
+
+# 3. Dashboard ANAC
 
 ```r
 rsconnect::deployApp(
@@ -30,7 +41,7 @@ rsconnect::deployApp(
 ```
 
 
-# 3. Dashboard PagoPA
+# 4. Dashboard PagoPA
 
 
 ```r
