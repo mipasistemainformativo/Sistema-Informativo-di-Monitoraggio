@@ -33,3 +33,6 @@ config.yml
 #Dati Shiny.io
 #Dashboard/**/*.rds
 Dashboard/**/*.json
+
+# Posit / shinyapps.io
+**/rsconnect/

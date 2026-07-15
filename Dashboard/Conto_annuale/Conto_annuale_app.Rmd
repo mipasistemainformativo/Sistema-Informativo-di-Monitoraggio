@@ -769,6 +769,44 @@ message(
 }
 ```
 
+```{js, echo=FALSE}
+// ── FIX MAPPE GRIGIE (shinyapps.io + iframe app madre) ──────────────────────
+// Le mappe Leaflet disegnate quando il contenitore è nascosto o ancora in
+// costruzione nascono con dimensione zero e restano grigie. Due meccanismi:
+// 1) al cambio scheda e al caricamento forziamo un evento "resize"
+//    (Leaflet e Plotly lo intercettano e si ridisegnano);
+// 2) un ResizeObserver sul body: FONDAMENTALE quando l'app gira dentro un
+//    iframe dell'app madre SIM. L'iframe parte nascosto (dimensione zero) e
+//    quando la scheda viene aperta NESSUN evento arriva dentro l'iframe:
+//    qui osserviamo direttamente le dimensioni del body e, appena cambiano,
+//    forziamo il ridisegno.
+$(document).ready(function() {
+  function simRedraw() {
+    setTimeout(function() { $(window).trigger('resize'); }, 150);
+    setTimeout(function() { $(window).trigger('resize'); }, 600);
+  }
+  // Al cambio di scheda nella navbar
+  $(document).on('click', '.navbar a', simRedraw);
+  // Al primo caricamento completo della pagina
+  $(window).on('load', simRedraw);
+  setTimeout(simRedraw, 1200);
+
+  // Osservatore delle dimensioni del body (caso iframe / avvio)
+  if (window.ResizeObserver) {
+    var lastW = 0, lastH = 0;
+    var ro = new ResizeObserver(function(entries) {
+      var r = entries[0].contentRect;
+      if (Math.abs(r.width - lastW) > 5 || Math.abs(r.height - lastH) > 5) {
+        lastW = r.width;
+        lastH = r.height;
+        simRedraw();
+      }
+    });
+    ro.observe(document.body);
+  }
+});
+```
+
 Copertura MPA
 ==============================================================================
 
@@ -897,7 +935,9 @@ output$map_spatial_copertura <- renderLeaflet({
       popup = ~popup_html,
       highlightOptions = leaflet::highlightOptions(weight=2,color="#333333",fillOpacity=0.9,bringToFront=TRUE)
     ) |>
-    leaflet::addLegend(pal=pal, values=~map_value, title="Copertura enti (%)", position="bottomright")
+    leaflet::addLegend(pal=pal, values=~map_value, title="Copertura enti (%)", position="bottomright") |>
+    # Vista fissa sull'Italia: corretta anche se la mappa nasce a dimensione zero
+    leaflet::fitBounds(lng1 = 6.5, lat1 = 36.4, lng2 = 18.6, lat2 = 47.2)
 })
 ```
 
@@ -1091,7 +1131,9 @@ output$map_ov_personale <- renderLeaflet({
       popup = ~popup_html,
       highlightOptions = leaflet::highlightOptions(weight=2,color="#333333",fillOpacity=0.9,bringToFront=TRUE)
     ) |>
-    leaflet::addLegend(pal=pal, values=~map_value, title="Personale totale", position="bottomright")
+    leaflet::addLegend(pal=pal, values=~map_value, title="Personale totale", position="bottomright") |>
+    # Vista fissa sull'Italia: corretta anche se la mappa nasce a dimensione zero
+    leaflet::fitBounds(lng1 = 6.5, lat1 = 36.4, lng2 = 18.6, lat2 = 47.2)
 })
 ```
 
@@ -1149,7 +1191,11 @@ renderPlotly({
   pie <- tibble::tibble(gruppo = c("Donne", "Uomini"), valore = c(k$personale_donne, k$personale_uomini))
   plot_ly(pie, labels = ~gruppo, values = ~valore, type = "pie", textinfo = "label+percent",
           marker = list(colors = c(col_viola, col_blu))) |>
-    playout(showlegend = TRUE)
+    playout(showlegend = TRUE,
+            # Legenda orizzontale in basso: evita che i nomi vengano
+            # tagliati sul bordo destro del riquadro
+            legend = list(orientation = "h", x = 0.5, xanchor = "center",
+                          y = -0.08))
 })
 ```
 
@@ -1160,7 +1206,11 @@ renderPlotly({
   pie <- tibble::tibble(gruppo = c("Tempo pieno", "Part-time"), valore = c(safe_sum(d$TEMPO_PIENO_TOT), safe_sum(d$TOT_PART_TIME)))
   plot_ly(pie, labels = ~gruppo, values = ~valore, type = "pie", textinfo = "label+percent",
           marker = list(colors = c(col_blu, col_arancio))) |>
-    playout(showlegend = TRUE)
+    playout(showlegend = TRUE,
+            # Legenda orizzontale in basso: evita che i nomi vengano
+            # tagliati sul bordo destro del riquadro
+            legend = list(orientation = "h", x = 0.5, xanchor = "center",
+                          y = -0.08))
 })
 ```
 
@@ -1229,7 +1279,9 @@ output$map_str_eta <- renderLeaflet({
       title=paste0("Età media (anni)<br><small>",
                    ifelse(by_zona,"per Zona","per Regione"),"</small>"),
       position="bottomright",
-      labFormat=leaflet::labelFormat(suffix=" anni", digits=1))
+      labFormat=leaflet::labelFormat(suffix=" anni", digits=1)) |>
+    # Vista fissa sull'Italia: corretta anche se la mappa nasce a dimensione zero
+    leaflet::fitBounds(lng1 = 6.5, lat1 = 36.4, lng2 = 18.6, lat2 = 47.2)
 })
 ```
 
@@ -1351,7 +1403,9 @@ output$map_form_spesa <- renderLeaflet({
     leaflet::addLegend(pal=pal, values=~map_value,
       title=paste0("€/dip.<br><small>",
                    ifelse(by_zona,"per Zona","per Regione"),"</small>"),
-      position="bottomright")
+      position="bottomright") |>
+    # Vista fissa sull'Italia: corretta anche se la mappa nasce a dimensione zero
+    leaflet::fitBounds(lng1 = 6.5, lat1 = 36.4, lng2 = 18.6, lat2 = 47.2)
 })
 ```
 
@@ -1591,59 +1645,144 @@ selectInput("agg_tabella", "Aggrega per:",
 agg_data <- make_ca_reactive("agg", include_anno = TRUE, ca_only = TRUE)
 register_reset_ca("agg", include_anno = TRUE)
 register_cascade_ca("agg")
-```
 
-Row
-------------------------------------------------------------------------------
-
-### Indicatori chiave — tabella aggregata
-```{r}
-renderDT({
+# ── Tabella condivisa da visualizzazione e download ──────────────────────────
+# Calcolata una volta sola per selezione. Per "Singola PA" il calcolo è
+# VETTORIALE (ogni riga del FACT è già una PA per l'anno selezionato):
+# niente group_modify su 10.000 gruppi, che su shinyapps sarebbe lentissimo.
+agg_table_r <- reactive({
   d <- agg_data()
   req(nrow(d) > 0)
-  group_var <- switch(input$agg_tabella,
-    regione    = "regione_dash",
-    fg         = "fg_dash",
-    tipologia  = "tipologia_dash",
-    ateco      = "ateco_dash",
-    pa         = "pa_label",
-    "regione_dash")
-  out <- d |>
-    filter(!is.na(.data[[group_var]]),
-           !.data[[group_var]] %in% c("Non classificato", "PA non classificata")) |>
-    group_by(.data[[group_var]]) |>
-    group_modify(~agg_ca(.x)) |>
-    ungroup() |>
-    rename(Categoria = dplyr::all_of(group_var)) |>
-    select(Categoria, n_pa, personale_tot, eta_media, quota_under35, quota_over55,
-           indice_ricambio, turnover, tasso_crescita,
-           spesa_form_per_dip, gg_assenza_per_dip) |>
-    arrange(desc(personale_tot)) |>
-    rename(
-      `N. PA`              = n_pa,
-      `Personale`          = personale_tot,
-      `Età media`          = eta_media,
-      `Under 35 %`         = quota_under35,
-      `Over 55 %`          = quota_over55,
-      `Ind. ricambio`      = indice_ricambio,
-      `Turnover %`         = turnover,
-      `Crescita %`         = tasso_crescita,
-      `Spesa form./dip.`   = spesa_form_per_dip,
-      `Gg ass./dip.`       = gg_assenza_per_dip
+
+  if ((input$agg_tabella %||% "regione") == "pa") {
+    num <- function(col) safe_num_col(d, col)
+    personale <- num("PERSONALE_TOT")
+    # Assunzioni/cessazioni mancanti trattate come 0, coerentemente con la
+    # vista aggregata (che somma con default 0): così il turnover si vede
+    # anche per le PA che non hanno il dato di flusso.
+    assun <- dplyr::coalesce(num("ASSUN_TOT"), 0)
+    cess  <- dplyr::coalesce(num("CESS_TOT"), 0)
+    tibble::tibble(
+      PA                 = d$pa_label,
+      Regione            = d$regione_dash,
+      personale_tot      = personale,
+      eta_media          = num("ETA_MEDIA_PA"),
+      quota_under35      = dplyr::coalesce(safe_div(num("UNDER35"), personale) * 100,
+                                           num("QUOTA_UNDER35_PERC")),
+      quota_over55       = dplyr::coalesce(safe_div(num("OVER55"), personale) * 100,
+                                           num("QUOTA_OVER55_PERC")),
+      indice_ricambio    = dplyr::coalesce(safe_div(num("UNDER35"), num("OVER55")),
+                                           num("INDICE_RICAMBIO_GENERAZIONALE")),
+      turnover           = dplyr::coalesce(num("TURNOVER_PERC"),
+                                           safe_div(assun + cess, personale) * 100),
+      tasso_crescita     = num("TASSO_CRESCITA_PERC"),
+      spesa_form_per_dip = dplyr::coalesce(safe_div(num("SPESA_FORMAZIONE_L020"), personale),
+                                           num("SPESA_FORMAZIONE_PER_DIPENDENTE")),
+      gg_assenza_per_dip = num("GG_ASSENZA_PER_DIP")
     ) |>
-    mutate(across(where(is.numeric), ~round(.x, 1)))
+      dplyr::filter(!is.na(PA), PA != "PA non classificata") |>
+      dplyr::arrange(dplyr::desc(personale_tot)) |>
+      dplyr::rename(
+        `Personale`          = personale_tot,
+        `Età media`          = eta_media,
+        `Under 35 %`         = quota_under35,
+        `Over 55 %`          = quota_over55,
+        `Ind. ricambio`      = indice_ricambio,
+        `Turnover %`         = turnover,
+        `Crescita %`         = tasso_crescita,
+        `Spesa form./dip.`   = spesa_form_per_dip,
+        `Gg ass./dip.`       = gg_assenza_per_dip
+      ) |>
+      dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~round(.x, 1)))
+  } else {
+    group_var <- switch(input$agg_tabella %||% "regione",
+      regione    = "regione_dash",
+      fg         = "fg_dash",
+      tipologia  = "tipologia_dash",
+      ateco      = "ateco_dash",
+      "regione_dash")
+    d |>
+      filter(!is.na(.data[[group_var]]),
+             .data[[group_var]] != "Non classificato") |>
+      group_by(.data[[group_var]]) |>
+      group_modify(~agg_ca(.x)) |>
+      ungroup() |>
+      rename(Categoria = dplyr::all_of(group_var)) |>
+      select(Categoria, n_pa, personale_tot, eta_media, quota_under35, quota_over55,
+             indice_ricambio, turnover, tasso_crescita,
+             spesa_form_per_dip, gg_assenza_per_dip) |>
+      arrange(desc(personale_tot)) |>
+      rename(
+        `N. PA`              = n_pa,
+        `Personale`          = personale_tot,
+        `Età media`          = eta_media,
+        `Under 35 %`         = quota_under35,
+        `Over 55 %`          = quota_over55,
+        `Ind. ricambio`      = indice_ricambio,
+        `Turnover %`         = turnover,
+        `Crescita %`         = tasso_crescita,
+        `Spesa form./dip.`   = spesa_form_per_dip,
+        `Gg ass./dip.`       = gg_assenza_per_dip
+      ) |>
+      mutate(across(where(is.numeric), ~round(.x, 1)))
+  }
+})
+
+# ── Download CSV (solo viste aggregate, NON per Singola PA) ──────────────────
+# Il file viene generato lato server (nessun peso lato browser).
+# write.csv2: separatore ";" e decimale "," per l'apertura diretta in Excel IT.
+uiOutput("agg_download_ui")
+
+output$agg_download_ui <- renderUI({
+  if ((input$agg_tabella %||% "regione") == "pa") return(NULL)
+  downloadButton("agg_download_csv", "Scarica tabella (CSV)",
+                 class = "btn btn-default", style = "margin-top: 8px;")
+})
+
+output$agg_download_csv <- downloadHandler(
+  filename = function() {
+    paste0("indicatori_CA_",
+           switch(input$agg_tabella %||% "regione",
+                  regione   = "per_regione",
+                  fg        = "per_forma_giuridica",
+                  tipologia = "per_tipologia",
+                  ateco     = "per_ateco",
+                  "aggregato"),
+           "_", input$agg_anno %||% ultimo_anno, ".csv")
+  },
+  content = function(file) {
+    utils::write.csv2(agg_table_r(), file, row.names = FALSE, na = "")
+  }
+)
+```
+
+Row {data-height=900}
+------------------------------------------------------------------------------
+
+### Indicatori chiave
+```{r}
+renderDT({
+  out <- agg_table_r()
+  req(nrow(out) > 0)
+
+  caption_txt <- paste0(
+    switch(input$agg_tabella %||% "regione",
+           regione   = "Vista aggregata per Regione",
+           fg        = "Vista aggregata per Forma giuridica",
+           tipologia = "Vista aggregata per Tipologia amministrativa",
+           ateco     = "Vista aggregata per Codice ATECO",
+           pa        = "Vista per singola PA",
+           "Vista aggregata"),
+    " — anno ", input$agg_anno %||% ultimo_anno
+  )
 
   datatable(
     out, rownames = FALSE, filter = "top",
-    extensions = "Buttons",
+    caption = htmltools::tags$caption(
+      style = "caption-side: top; text-align: left; font-weight: 600; color: #444;",
+      caption_txt
+    ),
     options = list(pageLength = 20, language = dt_lang, scrollX = TRUE,
-                   dom = "Blfrtip",
-                   buttons = list(
-                     list(extend = "csv",   text = "Scarica CSV",
-                          filename = "vista_aggregata_conto_annuale"),
-                     list(extend = "excel", text = "Scarica Excel",
-                          filename = "vista_aggregata_conto_annuale")
-                   ),
                    columnDefs = list(list(className="dt-center", targets="_all")))
   ) |>
     formatRound(columns = "Personale", digits = 0, mark = ".") |>
@@ -1672,5 +1811,5 @@ renderDT({
       background = styleInterval(c(15, 25),
         c("#d4edda", "#fff3cd", "#f8d7da")),
       fontWeight = "bold")
-}, server = FALSE)
+}, server = TRUE)
 ```

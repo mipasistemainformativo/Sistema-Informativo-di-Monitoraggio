@@ -154,6 +154,14 @@ nuts_cache <- readRDS("data/nuts_cache.rds")
 nuts2_it <- nuts_cache$nuts2_it
 raccordo_regioni <- nuts_cache$raccordo_regioni
 
+# ── IFRAME CON CARICAMENTO "PIGRO" (lazy loading) ────────────────────────────
+# L'URL vero viene messo in data-src e NON in src: l'app figlia parte solo
+# quando l'utente apre la relativa scheda (vedi blocco js dopo il CSS).
+# Vantaggi:
+# 1. le mappe Leaflet delle figlie non nascono più dentro schede nascoste
+#    a dimensione zero (causa delle "mappe grigie");
+# 2. l'apertura iniziale del SIM è molto più veloce e leggera: non vengono
+#    più avviate 4 app shiny contemporaneamente.
 iframe_app <- function(url, title, available = TRUE) {
   if (!available || is.null(url) || !nzchar(url)) {
     return(div(
@@ -164,7 +172,8 @@ iframe_app <- function(url, title, available = TRUE) {
   }
 
   tags$iframe(
-    src = url,
+    `data-src` = url,
+    src = "about:blank",
     class = "sim-source-frame",
     style = "width:100%; height:calc(100vh - 132px); min-height:720px; border:0; background:white;",
     title = title
@@ -205,6 +214,31 @@ cat("<style>
 }
 
 </style>")
+```
+
+```{js, echo=FALSE}
+// ── LAZY LOADING DELLE APP FIGLIE ────────────────────────────────────────────
+// Gli iframe delle figlie hanno l'URL in data-src e partono su about:blank.
+// Quando l'utente apre una scheda, carichiamo SOLO l'iframe visibile in quel
+// momento. Così l'app figlia si avvia quando la scheda è già visibile e le
+// sue mappe Leaflet nascono con le dimensioni corrette (niente mappe grigie).
+$(document).ready(function() {
+  function simLoadVisibleIframes() {
+    setTimeout(function() {
+      $('.sim-source-frame[data-src]').each(function() {
+        if ($(this).is(':visible')) {
+          this.src = this.getAttribute('data-src');
+          this.removeAttribute('data-src');
+        }
+      });
+    }, 200);
+  }
+  // Al cambio di scheda nella navbar
+  $(document).on('click', '.navbar a', simLoadVisibleIframes);
+  // Al caricamento iniziale (nel caso il link di ingresso punti già a una figlia)
+  $(window).on('load', simLoadVisibleIframes);
+  setTimeout(simLoadVisibleIframes, 800);
+});
 ```
 
 Overview Perimetro PA {data-icon="fa-building"}
