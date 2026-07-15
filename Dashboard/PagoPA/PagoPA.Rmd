@@ -26,6 +26,7 @@ suppressPackageStartupMessages({
   library(sf)
   library(ggplot2)
   library(DT)
+  library(leaflet)
 })
 
 #Caricamento dati e parametri
@@ -60,6 +61,14 @@ format_ita <- function(x) {
     }
   })
   return(as.character(res)) 
+}
+
+normalizza_codice_regione <- function(x) {
+  stringr::str_pad(
+    as.character(x),
+    width = 2,
+    pad = "0"
+  )
 }
 
 # Mappature Dizionari
@@ -465,31 +474,121 @@ Row {data-height=700}
 -----------------------------------------------------------------------
 ### Mappa Geografica
 ```{r}
-plotlyOutput("mappa_regioni", height = "600px")
-output$mappa_regioni <- renderPlotly({
-  dati_m <- df %>% filter(fil == "fil_reg", ind == input$sel_ind_reg)
-  mf <- regioni_shape %>% left_join(dati_m, by = c("reg_code" = "fil_val"))
+# plotlyOutput("mappa_regioni", height = "600px")
+# output$mappa_regioni <- renderPlotly({
+#   dati_m <- df %>% filter(fil == "fil_reg", ind == input$sel_ind_reg)
+#   mf <- regioni_shape %>% left_join(dati_m, by = c("reg_code" = "fil_val"))
+# 
+#   etichetta_ind <- unname(ind_regionali_map[input$sel_ind_reg])
+# 
+#   mf <- mf %>%
+#     mutate(
+#       display_val = ifelse(is.na(ind_val), "Nessun dato",
+#                             scales::label_number(big.mark = ".", decimal.mark = ",")(ind_val)),
+#       tooltip_txt = paste0(reg_name, "\n", etichetta_ind, ": ", display_val)
+#     )
+# 
+#   p <- ggplot(mf) +
+#     geom_sf(aes(fill = ind_val, text = tooltip_txt), color = "white", linewidth = 0.35) +
+#     scale_fill_distiller(
+#       palette = "YlGnBu", direction = 1, na.value = "#f0f0f0", name = etichetta_ind
+#     ) +
+#     theme_void() +
+#     theme(legend.position = "bottom")
+# 
+#   ggplotly(p, tooltip = "text") |>
+#     layout(legend = list(orientation = "h")) |>
+#     config(displayModeBar = FALSE)
+# })
+leafletOutput(
+  outputId = "mappa_regioni",
+  height = "600px"
+)
 
-  etichetta_ind <- unname(ind_regionali_map[input$sel_ind_reg])
+output$mappa_regioni <- renderLeaflet({
+
+  req(input$sel_ind_reg)
+
+  dati_m <- df %>%
+    filter(
+      fil == "fil_reg",
+      ind == input$sel_ind_reg
+    ) %>%
+    mutate(
+      fil_val = normalizza_codice_regione(fil_val)
+    )
+
+  mf <- regioni_shape %>%
+    mutate(
+      reg_code = normalizza_codice_regione(reg_code)
+    ) %>%
+    left_join(
+      dati_m,
+      by = c("reg_code" = "fil_val")
+    )
+
+  etichetta_ind <- unname(
+    ind_regionali_map[input$sel_ind_reg]
+  )
+
+  pal <- leaflet::colorNumeric(
+    palette = "YlGnBu",
+    domain = mf$ind_val,
+    na.color = "#f0f0f0"
+  )
 
   mf <- mf %>%
     mutate(
-      display_val = ifelse(is.na(ind_val), "Nessun dato",
-                            scales::label_number(big.mark = ".", decimal.mark = ",")(ind_val)),
-      tooltip_txt = paste0(reg_name, "\n", etichetta_ind, ": ", display_val)
+      valore_label = if_else(
+        is.na(ind_val),
+        "Nessun dato",
+        scales::label_number(
+          big.mark = ".",
+          decimal.mark = ","
+        )(ind_val)
+      ),
+      popup_html = paste0(
+        "<b>", reg_name, "</b>",
+        "<br>", etichetta_ind, ": ",
+        valore_label
+      )
     )
 
-  p <- ggplot(mf) +
-    geom_sf(aes(fill = ind_val, text = tooltip_txt), color = "white", linewidth = 0.35) +
-    scale_fill_distiller(
-      palette = "YlGnBu", direction = 1, na.value = "#f0f0f0", name = etichetta_ind
-    ) +
-    theme_void() +
-    theme(legend.position = "bottom")
-
-  ggplotly(p, tooltip = "text") |>
-    layout(legend = list(orientation = "h")) |>
-    config(displayModeBar = FALSE)
+  leaflet::leaflet(mf) %>%
+    leaflet::addProviderTiles(
+  leaflet::providers$CartoDB.Positron
+) %>%
+    leaflet::addPolygons(
+      fillColor = ~pal(ind_val),
+      fillOpacity = 0.82,
+      color = "#666666",
+      weight = 1,
+      popup = ~popup_html,
+      label = ~paste0(
+        reg_name,
+        " — ",
+        valore_label
+      ),
+      highlightOptions = leaflet::highlightOptions(
+        weight = 2,
+        color = "#333333",
+        fillOpacity = 0.9,
+        bringToFront = TRUE
+      )
+    ) %>%
+    leaflet::addLegend(
+      pal = pal,
+      values = ~ind_val,
+      title = etichetta_ind,
+      position = "bottomright",
+      opacity = 0.82
+    ) %>%
+    leaflet::fitBounds(
+      lng1 = 6.5,
+      lat1 = 35.3,
+      lng2 = 19,
+      lat2 = 47.3
+    )
 })
 ```
 
