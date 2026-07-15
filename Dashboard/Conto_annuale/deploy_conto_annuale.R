@@ -65,11 +65,7 @@ options(
 rsconnect::deployApp(
   appDir = app_dir,
   appPrimaryDoc = "Conto_annuale_app.Rmd",
-  
-  # Usa lo stesso nome dell'app già pubblicata
-  # per mantenere invariato il link.
   appName = "ContoAnnuale",
-  
   forceUpdate = TRUE,
   launch.browser = TRUE
 )
