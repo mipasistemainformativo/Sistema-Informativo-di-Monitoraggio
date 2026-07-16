@@ -4,7 +4,7 @@ output:
   flexdashboard::flex_dashboard:
     orientation: rows
     vertical_layout: scroll
-    theme: cosmo
+    theme: flatly
     self_contained: false
 runtime: shiny
 params:
@@ -57,6 +57,26 @@ suppressPackageStartupMessages({
   library(shiny)
   library(openxlsx)
 })
+
+# 1. Risorse statiche della dashboard ----
+
+file_rmd <- normalizePath(
+  knitr::current_input(),
+  winslash = "/",
+  mustWork = TRUE
+)
+
+dir_app <- dirname(file_rmd)
+dir_www <- file.path(dir_app, "www")
+
+if (!dir.exists(dir_www)) {
+  stop("Cartella delle risorse non trovata: ", dir_www)
+}
+
+shiny::addResourcePath(
+  prefix = "sim-assets",
+  directoryPath = dir_www
+)
 
 `%||%` <- function(x, y) {
   if (is.null(x) || length(x) == 0L || all(is.na(x)) || !nzchar(as.character(x[[1]]))) y else x
@@ -249,11 +269,47 @@ iframe_app <- function(url, title, available = TRUE) {
 ```{r css, results='asis'}
 cat("<style>
 .navbar-brand { font-weight: 700; }
+/* Logo MIPA in alto a destra */
+.sim-mipa-logo {
+  position: fixed;
+  top: 8px;
+  right: 18px;
+  height: 38px;
+  width: auto;
+  max-width: 155px;
+  object-fit: contain;
+  z-index: 2000;
+}
+
+@media (max-width: 1100px) {
+  .sim-mipa-logo {
+    height: 30px;
+    max-width: 105px;
+    right: 10px;
+  }
+}
 .sim-card { border:1px solid #d9e0e6; border-radius:8px; padding:18px; background:#fff; min-height:160px; }
 .sim-card h3 { margin-top:0; }
+.sim-project-card {
+  min-height: auto;
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+
+.sim-project-card p {
+  max-width: 1200px;
+}
+
+.sim-project-card .btn {
+  margin-top: 8px;
+}
+
+.sim-project-card .fa {
+  margin-right: 6px;
+}
 .sim-muted { color:#667784; font-size:13px; }
 .sim-placeholder { margin:40px; padding:30px; border:1px dashed #aab7c2; border-radius:8px; background:#f8fafb; }
-.section.sidebar { background:#f7f9fb; }
+.section.sidebar { background:#fafbfc; border-right: 1px solid #e3e7eb; }
 
 .selectize-input {padding-right: 28px !important;}
 .selectize-input > input {width: 100% !important; min-width: 0 !important;}
@@ -311,6 +367,107 @@ cat("<style>
   border: 0;
 }
 
+/* ── ALLINEAMENTO ALLO STILE DI CONTO ANNUALE ──────────────────────────── */
+
+.navbar,
+.navbar-inverse {
+  background-color: #1f4e79 !important;
+  border-color: #1f4e79 !important;
+}
+
+.navbar-inverse .navbar-brand {
+  color: #ffffff;
+  font-size: 18px !important;
+  padding-left: 20px;
+  padding-right: 18px;
+}
+
+.navbar-inverse .navbar-nav > li > a {
+  color: #ffffff;
+  font-size: 14px !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+  white-space: nowrap;
+}
+
+.navbar-nav > li > a,
+.navbar-brand {
+  padding-top: 12px !important;
+  padding-bottom: 12px !important;
+}
+
+/* Riserva lo spazio del logo MIPA: la navbar non deve estendersi sotto di esso */
+.navbar .container-fluid {
+  padding-right: 175px !important;
+  box-sizing: border-box;
+}
+
+@media (max-width: 1100px) {
+  .navbar .container-fluid {
+    padding-right: 120px !important;
+  }
+}
+
+.section.sidebar {
+  padding: 14px 14px 35px 14px !important;
+  box-sizing: border-box !important;
+}
+
+.section.sidebar,
+.section.sidebar label,
+.section.sidebar .control-label {
+  font-size: 13px !important;
+}
+
+.section.sidebar label,
+.section.sidebar .control-label {
+  margin-bottom: 5px !important;
+  font-weight: 500;
+}
+
+.section.sidebar h1, .section.sidebar h2, .section.sidebar h3 {
+  font-size: 16px !important;
+}
+
+.section.sidebar .form-control,
+.section.sidebar .selectize-input {
+  font-size: 13px !important;
+  min-height: 34px !important;
+  padding-top: 6px !important;
+  padding-bottom: 6px !important;
+}
+
+.section.sidebar .form-group {
+  margin-bottom: 12px !important;
+}
+
+.section.sidebar .btn {
+  font-size: 13px !important;
+  padding: 7px 12px !important;
+}
+
+.selectize-dropdown,
+.selectize-dropdown.form-control {
+  z-index: 10000 !important;
+  font-size: 13px !important;
+}
+
+.value-box {
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.08);
+}
+
+/* Colori più sobri per i value-box, coerenti con la palette di Conto Annuale */
+.value-box.bg-primary { background-color: #2C6E9B !important; }
+.value-box.bg-success { background-color: #3F9C6D !important; }
+.value-box.bg-warning { background-color: #D98832 !important; }
+.value-box.bg-info    { background-color: #5B6B79 !important; }
+.value-box.bg-danger  { background-color: #C0504D !important; }
+
+.datatables {
+  font-size: 12px;
+}
+
 </style>")
 ```
 
@@ -321,6 +478,17 @@ cat("<style>
 // momento. Così l'app figlia si avvia quando la scheda è già visibile e le
 // sue mappe Leaflet nascono con le dimensioni corrette (niente mappe grigie).
 $(document).ready(function() {
+  // Inserisce il logo MIPA nella barra superiore
+    if ($('.sim-mipa-logo').length === 0) {
+    $('body').append(
+      '<img ' +
+      'src="sim-assets/logo_MIPA_trasparente.png" ' +
+      'class="sim-mipa-logo" ' +
+      'alt="Consorzio MIPA" ' +
+      'title="Consorzio MIPA">'
+    );
+  }
+  
   function simLoadVisibleIframes() {
     setTimeout(function() {
       $('.sim-source-frame[data-src]').each(function() {
@@ -558,7 +726,7 @@ renderValueBox({
 Row {data-height=650}
 -----------------------------------------------------------------------
 
-### Distribuzione regionale {data-width=30}
+### Distribuzione regionale {data-width=42}
 
 ```{r}
 renderLeaflet({
@@ -660,7 +828,7 @@ renderLeaflet({
 })
 ```
 
-### Enti del perimetro selezionato {data-width=70}
+### Enti del perimetro selezionato {data-width=58}
 
 ```{r tabella-overview-ui}
 htmltools::tagList(
@@ -749,7 +917,7 @@ output$tabella_overview <- DT::renderDT({
 })
 ```
 
-Row {data-height=820}
+Row {data-height=450}
 -------------------------------------
 
 ### Composizione per forma giuridica  {data-width=40}
@@ -762,11 +930,11 @@ renderPlotly({
       forma_giuridica != ""
     ) |>
     count(forma_giuridica, sort = TRUE) |>
-    slice_head(n = 12) |>
+    slice_head(n = 10) |>
     mutate(
       forma_label = stringr::str_wrap(
         forma_giuridica,
-        width = 38
+        width = 30
       )
     )
 
@@ -776,6 +944,7 @@ renderPlotly({
     y = ~reorder(forma_label, n),
     type = "bar",
     orientation = "h",
+    height = 380,
     hovertext = ~paste0(
       "<b>", forma_giuridica, "</b>",
       "<br>Numero di enti: ", fmt_num(n)
@@ -784,6 +953,7 @@ renderPlotly({
     textposition = "none"
   ) |>
     layout(
+      font = list(family = "Lato, Helvetica, Arial, sans-serif", size = 12, color = "#3C3C3C"),
       xaxis = list(
         title = "Numero di enti",
         rangemode = "tozero",
@@ -795,7 +965,7 @@ renderPlotly({
         tickfont = list(size = 11)
       ),
       margin = list(
-        l = 250,
+        l = 220,
         r = 30,
         t = 20,
         b = 60
@@ -803,8 +973,7 @@ renderPlotly({
       showlegend = FALSE
     ) |>
     config(
-      displayModeBar = FALSE,
-      responsive = TRUE
+      displayModeBar = FALSE
     )
 })
 ```
@@ -826,11 +995,10 @@ renderPlotly({
       ateco_label_completo != ""
     ) |>
     count(ateco_label_completo, sort = TRUE) |>
-    slice_head(n = 12) |>
+    slice_head(n = 8) |>
     mutate(
-      ateco_label = stringr::str_wrap(
-        ateco_label_completo,
-        width = 70
+      ateco_label = make.unique(
+        stringr::str_trunc(ateco_label_completo, 55)
       )
     )
 
@@ -840,6 +1008,7 @@ renderPlotly({
     y = ~reorder(ateco_label, n),
     type = "bar",
     orientation = "h",
+    height = 380,
     hovertext = ~paste0(
       "<b>", ateco_label_completo, "</b>",
       "<br>Numero di enti: ", fmt_num(n)
@@ -848,6 +1017,7 @@ renderPlotly({
     textposition = "none"
   ) |>
     layout(
+      font = list(family = "Lato, Helvetica, Arial, sans-serif", size = 12, color = "#3C3C3C"),
       xaxis = list(
         title = "Numero di enti",
         rangemode = "tozero",
@@ -860,7 +1030,7 @@ renderPlotly({
         tickfont = list(size = 10)
       ),
       margin = list(
-        l = 390,
+        l = 260,
         r = 30,
         t = 20,
         b = 60
@@ -868,13 +1038,12 @@ renderPlotly({
       showlegend = FALSE
     ) |>
     config(
-      displayModeBar = FALSE,
-      responsive = TRUE
+      displayModeBar = FALSE
     )
 })
 ```
 
-Row {data-height=620}
+Row {data-height=420}
 -------------------------------------
 
 ### Sovrapposizione dei perimetri
@@ -901,10 +1070,18 @@ renderPlotly({
     values = ~n,
     type = "pie",
     hole = 0.45,
+    height = 380,
     textinfo = "label+percent",
+    textfont = list(size = 12),
+    insidetextfont = list(size = 11),
+    outsidetextfont = list(size = 11),
     hoverinfo = "label+value+percent"
   ) |>
-    layout(showlegend = FALSE) |>
+    layout(
+      font = list(family = "Lato, Helvetica, Arial, sans-serif", size = 12, color = "#3C3C3C"),
+      showlegend = FALSE,
+      margin = list(t = 70, b = 20, l = 20, r = 20)
+    ) |>
     config(displayModeBar = FALSE)
 })
 ```
@@ -1004,6 +1181,47 @@ La dashboard consente di confrontare gli enti, le categorie amministrative, le f
 <p class="sim-muted">
 La dashboard consente analisi territoriali e confronti per forma giuridica e settore CPV.
 </p>
+</div>
+
+Row
+-----------------------------------------------------------------------
+
+### Informazioni sul progetto
+
+<div class="sim-card sim-project-card">
+
+<p>
+Il <strong>Sistema Informativo di Monitoraggio (SIM) della PA</strong>,
+in versione prototipale, è stato realizzato dal
+<strong>Consorzio Mipa</strong>, per conto dell’<strong>Istat</strong>,
+nell’ambito del
+<em>“Servizio a supporto della progettazione, classificazione e analisi
+dei risultati integrati delle rilevazioni, dei dati amministrativi e
+delle nuove fonti per il monitoraggio delle riforme della PA”</em> -
+Piano Nazionale di Ripresa e Resilienza (PNRR) –
+Investimento 2.2
+<em>“Task Force digitalizzazione, monitoraggio e performance”</em> –
+Sub-investimento 2.2.4
+<em>“Monitoraggio e comunicazione delle azioni di semplificazione”</em>.
+</p>
+
+
+<p>
+<a
+  href="sim-assets/SIM_PA_beta_fonti_riuso.pdf"
+  target="_blank"
+  rel="noopener noreferrer"
+  class="btn btn-primary"
+>
+  <i class="fa fa-file-pdf-o"></i>
+  Fonti, licenze open data e riuso
+</a>
+</p>
+
+<p class="sim-muted">
+Il documento può essere visualizzato direttamente nel browser oppure scaricato in formato PDF.
+</p>
+
 </div>
 
 Conto annuale {data-icon="fa-users"}

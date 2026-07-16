@@ -933,6 +933,7 @@ output$map_spatial_copertura <- renderLeaflet({
     leaflet::addPolygons(
       fillColor = ~fill_color, fillOpacity = 0.82, weight = 1, color = "#666666",
       popup = ~popup_html,
+      label = ~lapply(popup_html, htmltools::HTML),
       highlightOptions = leaflet::highlightOptions(weight=2,color="#333333",fillOpacity=0.9,bringToFront=TRUE)
     ) |>
     leaflet::addLegend(pal=pal, values=~map_value, title="Copertura enti (%)", position="bottomright") |>
@@ -1129,6 +1130,7 @@ output$map_ov_personale <- renderLeaflet({
     leaflet::addPolygons(
       fillColor = ~fill_color, fillOpacity = 0.82, weight = 1, color = "#666666",
       popup = ~popup_html,
+      label = ~lapply(popup_html, htmltools::HTML),
       highlightOptions = leaflet::highlightOptions(weight=2,color="#333333",fillOpacity=0.9,bringToFront=TRUE)
     ) |>
     leaflet::addLegend(pal=pal, values=~map_value, title="Personale totale", position="bottomright") |>
@@ -1273,6 +1275,7 @@ output$map_str_eta <- renderLeaflet({
     leaflet::addProviderTiles("CartoDB.Positron") |>
     leaflet::addPolygons(fillColor=~fill_color, fillOpacity=0.82,
       weight=1, color="#888", popup=~popup_html,
+      label = ~lapply(popup_html, htmltools::HTML),
       highlightOptions=leaflet::highlightOptions(
         weight=2, color="#333", fillOpacity=0.95, bringToFront=TRUE)) |>
     leaflet::addLegend(pal=pal, values=~map_value,
@@ -1398,6 +1401,7 @@ output$map_form_spesa <- renderLeaflet({
     leaflet::addProviderTiles("CartoDB.Positron") |>
     leaflet::addPolygons(fillColor=~fill_color, fillOpacity=0.82,
       weight=1, color="#888", popup=~popup_html,
+      label = ~lapply(popup_html, htmltools::HTML),
       highlightOptions=leaflet::highlightOptions(
         weight=2, color="#333", fillOpacity=0.95, bringToFront=TRUE)) |>
     leaflet::addLegend(pal=pal, values=~map_value,
