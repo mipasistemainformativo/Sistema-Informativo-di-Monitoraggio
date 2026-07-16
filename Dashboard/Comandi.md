@@ -7,8 +7,11 @@ rsconnect::deployApp(
   appFiles = c(
     "Sistemainformativo.Rmd",
     "data/master_pa.rds",
-    "data/nuts_cache.rds"
+    "data/nuts_cache.rds",
+    "www/logo_MIPA_trasparente.png",
+    "www/SIM_PA_beta_fonti_riuso.pdf"
   ),
+  appName = "sistemainformativo",
   forceUpdate = TRUE
 )
 ```
