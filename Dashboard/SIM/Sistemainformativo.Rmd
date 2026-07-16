@@ -19,8 +19,9 @@ params:
   # gira in un container separato da quello delle app figlie.
   # Impostare a null finche' la relativa dashboard non e' stata deployata:
   # iframe_app() mostra automaticamente il placeholder "sezione non disponibile".
-  url_conto_annuale: "https://mipasistemainformativo.shinyapps.io/Conto_annuale/"
-  url_padigitale: "/private/var/folders/24/bqbcz15n3d97c57dr0_sybnr0000gn/T/RtmpmCEYzT/file160357cfb82c3/PAdigitale2026.html"
+  url_conto_annuale: "https://mipasistemainformativo.shinyapps.io/ContoAnnuale/"
+  # url_conto_annuale: "https://mipasistemainformativo.shinyapps.io/Conto_annuale/"
+  url_padigitale: "https://mipasistemainformativo.shinyapps.io/PAdigitale2026/" #"/private/var/folders/24/bqbcz15n3d97c57dr0_sybnr0000gn/T/RtmpmCEYzT/file160357cfb82c3/PAdigitale2026.html"
   url_indicators_pagopa: "https://mipasistemainformativo.shinyapps.io/PagoPA/"
   url_anac: "https://mipasistemainformativo.shinyapps.io/ANAC/"
 
@@ -49,7 +50,7 @@ suppressPackageStartupMessages({
   library(tibble)
   library(plotly)
   library(DT)
-  library(ggplot2)
+  library(leaflet)
   library(sf)
   library(htmltools)
   library(flexdashboard)
@@ -450,13 +451,15 @@ Row {data-height=650}
 ### Distribuzione regionale {data-width=30}
 
 ```{r}
-renderPlotly({
+renderLeaflet({
   data <- overview_data()
 
   reg <- data |>
     filter(!is.na(codice_regione), codice_regione != "") |>
     count(codice_regione, regione, name = "n_enti") |>
-    mutate(quota_enti = if (nrow(data) > 0L) 100 * n_enti / nrow(data) else 0) |>
+    mutate(
+      quota_enti = if (nrow(data) > 0L) 100 * n_enti / nrow(data) else 0
+    ) |>
     left_join(raccordo_regioni, by = "codice_regione")
 
   indicator <- input$overview_indicatore_mappa
@@ -472,22 +475,42 @@ renderPlotly({
         ifelse(is.na(valore_mappa), "Nessun dato", fmt_pct(valore_mappa))
       },
       tooltip_txt = paste0(
-        NUTS_NAME, "\n", label, ": ", display_val,
-        "\nEnti: ", ifelse(is.na(n_enti), "Nessun dato", fmt_num(n_enti))
+        "<b>", NUTS_NAME, "</b>",
+        "<br>", label, ": ", display_val,
+        "<br>Enti: ", ifelse(is.na(n_enti), "Nessun dato", fmt_num(n_enti))
       )
     )
 
-  p <- ggplot(map_data) +
-    geom_sf(aes(fill = valore_mappa, text = tooltip_txt), color = "white", linewidth = 0.35) +
-    scale_fill_distiller(
-      palette = "Blues", direction = 1, na.value = "#eeeeee", name = label
-    ) +
-    theme_void() +
-    theme(legend.position = "bottom")
+  pal <- leaflet::colorNumeric(
+    palette = "Blues",
+    domain = map_data$valore_mappa,
+    na.color = "#eeeeee"
+  )
 
-  ggplotly(p, tooltip = "text") |>
-    layout(legend = list(orientation = "h")) |>
-    config(displayModeBar = FALSE)
+  leaflet(map_data) |>
+    addProviderTiles(leaflet::providers$CartoDB.Positron) |>
+    addPolygons(
+      fillColor = ~pal(valore_mappa),
+      fillOpacity = 0.8,
+      color = "white",
+      weight = 1,
+      opacity = 1,
+      popup = ~tooltip_txt,
+      label = ~htmltools::HTML(tooltip_txt),
+      highlightOptions = highlightOptions(
+        weight = 2,
+        color = "#333333",
+        fillOpacity = 0.9,
+        bringToFront = TRUE
+      )
+    ) |>
+    addLegend(
+      pal = pal,
+      values = ~valore_mappa,
+      title = label,
+      opacity = 0.8,
+      position = "bottomright"
+    )
 })
 ```
 
