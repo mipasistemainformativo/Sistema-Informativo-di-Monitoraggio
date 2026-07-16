@@ -21,7 +21,7 @@ params:
   # iframe_app() mostra automaticamente il placeholder "sezione non disponibile".
   url_conto_annuale: "https://mipasistemainformativo.shinyapps.io/ContoAnnuale/"
   # url_conto_annuale: "https://mipasistemainformativo.shinyapps.io/Conto_annuale/"
-  url_padigitale: "https://mipasistemainformativo.shinyapps.io/PAdigitale2026/" #"/private/var/folders/24/bqbcz15n3d97c57dr0_sybnr0000gn/T/RtmpmCEYzT/file160357cfb82c3/PAdigitale2026.html"
+  url_padigitale: "https://mipasistemainformativo.shinyapps.io/PAdigitale2026/" 
   url_indicators_pagopa: "https://mipasistemainformativo.shinyapps.io/PagoPA/"
   url_anac: "https://mipasistemainformativo.shinyapps.io/ANAC/"
 
@@ -55,6 +55,7 @@ suppressPackageStartupMessages({
   library(htmltools)
   library(flexdashboard)
   library(shiny)
+  library(openxlsx)
 })
 
 `%||%` <- function(x, y) {
@@ -114,32 +115,6 @@ if (length(missing_cols) > 0L) {
   stop("Nella lista mancano le colonne: ", paste(missing_cols, collapse = ", "))
 }
 
-master <- master_raw |>
-  transmute(
-    id_ente = coalesce(
-      na_if(as.character(codice_fiscale), ""),
-      na_if(as.character(codice_ente_ipa), ""),
-      paste0("LISTA_", row_number())
-    ),
-    codice_fiscale = as.character(codice_fiscale),
-    codice_ipa = as.character(codice_ente_ipa),
-    nome_ente = as.character(ragione_sociale),
-    codice_regione = str_pad(as.character(codice_reg), 2, pad = "0"),
-    regione = coalesce(as.character(regione_bdap), "Non disponibile"),
-    codice_provincia = str_pad(as.character(codice_provincia), 3, pad = "0"),
-    provincia = as.character(provincia),
-    codice_comune = as.character(codice_comune),
-    comune = as.character(comune),
-    codice_forma_giuridica = as.character(fg),
-    forma_giuridica = coalesce(as.character(desc_fg), "Non disponibile"),
-    codice_ateco = as.character(ateco_bdap),
-    ateco = coalesce(as.character(descr_ateco_bdap), "Non disponibile"),
-    presente_mpa = as_flag(presente_mpa),
-    presente_s13 = as_flag(presente_s13),
-    presente_bdap = as_flag(presente_bdap)
-  ) |>
-  distinct(id_ente, .keep_all = TRUE)
-
 # Confini NUTS2 + raccordo regioni: SOLO da cache pre-calcolata (nessun
 # fallback a giscoR/terra a runtime). Stesso identico principio di ANAC e
 # PagoPA: readRDS di uno shapefile gia' pronto, nessuna dipendenza pesante
@@ -154,6 +129,95 @@ if (!file.exists("data/nuts_cache.rds")) {
 nuts_cache <- readRDS("data/nuts_cache.rds")
 nuts2_it <- nuts_cache$nuts2_it
 raccordo_regioni <- nuts_cache$raccordo_regioni
+
+regione_lookup <- raccordo_regioni |>
+  left_join(
+    nuts2_it |>
+      sf::st_drop_geometry() |>
+      transmute(
+        NUTS_ID,
+        regione_da_codice = dplyr::coalesce(
+          as.character(NAME_LATN),
+          as.character(NUTS_NAME),
+          as.character(NUTS_ID)
+        )
+      ) |>
+      distinct(),
+    by = "NUTS_ID"
+  ) |>
+  transmute(
+    codice_regione,
+    regione = regione_da_codice
+  ) |>
+  distinct()
+master <- master_raw |>
+  transmute(
+    id_ente = coalesce(
+      na_if(as.character(codice_fiscale), ""),
+      na_if(as.character(codice_ente_ipa), ""),
+      paste0("LISTA_", row_number())
+    ),
+    codice_fiscale = as.character(codice_fiscale),
+    codice_ipa = as.character(codice_ente_ipa),
+    nome_ente = as.character(ragione_sociale),
+
+    codice_regione = str_pad(as.character(codice_reg), 2, pad = "0"),
+    regione_bdap = as.character(regione_bdap),
+
+    codice_provincia = str_pad(as.character(codice_provincia), 3, pad = "0"),
+    provincia = as.character(provincia),
+    codice_comune = as.character(codice_comune),
+    comune = as.character(comune),
+
+    codice_forma_giuridica = as.character(fg),
+    forma_giuridica = coalesce(as.character(desc_fg), "Non disponibile"),
+
+    codice_ateco = as.character(ateco_bdap),
+    ateco = coalesce(as.character(descr_ateco_bdap), "Non disponibile"),
+
+    presente_mpa = as_flag(presente_mpa),
+    presente_s13 = as_flag(presente_s13),
+    presente_bdap = as_flag(presente_bdap)
+  ) |>
+  left_join(
+    regione_lookup,
+    by = "codice_regione"
+  ) |>
+  mutate(
+    regione = coalesce(
+      regione,
+      "Non disponibile"
+    )
+  ) |>
+  distinct(id_ente, .keep_all = TRUE)
+
+
+# master <- master_raw |>
+#   transmute(
+#     id_ente = coalesce(
+#       na_if(as.character(codice_fiscale), ""),
+#       na_if(as.character(codice_ente_ipa), ""),
+#       paste0("LISTA_", row_number())
+#     ),
+#     codice_fiscale = as.character(codice_fiscale),
+#     codice_ipa = as.character(codice_ente_ipa),
+#     nome_ente = as.character(ragione_sociale),
+#     codice_regione = str_pad(as.character(codice_reg), 2, pad = "0"),
+#     regione = coalesce(as.character(regione_bdap), "Non disponibile"),
+#     codice_provincia = str_pad(as.character(codice_provincia), 3, pad = "0"),
+#     provincia = as.character(provincia),
+#     codice_comune = as.character(codice_comune),
+#     comune = as.character(comune),
+#     codice_forma_giuridica = as.character(fg),
+#     forma_giuridica = coalesce(as.character(desc_fg), "Non disponibile"),
+#     codice_ateco = as.character(ateco_bdap),
+#     ateco = coalesce(as.character(descr_ateco_bdap), "Non disponibile"),
+#     presente_mpa = as_flag(presente_mpa),
+#     presente_s13 = as_flag(presente_s13),
+#     presente_bdap = as_flag(presente_bdap)
+#   ) |>
+#   distinct(id_ente, .keep_all = TRUE)
+
 
 # ── IFRAME CON CARICAMENTO "PIGRO" (lazy loading) ────────────────────────────
 # L'URL vero viene messo in data-src e NON in src: l'app figlia parte solo
@@ -190,6 +254,39 @@ cat("<style>
 .sim-muted { color:#667784; font-size:13px; }
 .sim-placeholder { margin:40px; padding:30px; border:1px dashed #aab7c2; border-radius:8px; background:#f8fafb; }
 .section.sidebar { background:#f7f9fb; }
+
+.selectize-input {padding-right: 28px !important;}
+.selectize-input > input {width: 100% !important; min-width: 0 !important;}
+.sidebar .form-group {margin-bottom: 18px;}
+
+.overview-table-tools {
+  position: relative;
+  z-index: 10;
+  margin: 0 0 -44px 0;
+  padding: 8px 0 0 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+#download_overview_csv,
+#download_overview_xlsx {
+  width: auto !important;
+  display: inline-block !important;
+  padding: 4px 10px !important;
+  font-size: 13px !important;
+  margin: 0 !important;
+  background-color: #f5f5f5 !important;
+  color: #333 !important;
+  border: 1px solid #ccc !important;
+}
+
+#download_overview_csv.btn,
+#download_overview_xlsx.btn {
+  background-color: #f5f5f5 !important;
+  color: #333 !important;
+  border: 1px solid #ccc !important;
+}
 
 /* Le pagine che ospitano app figlie devono usare tutta l'altezza disponibile. */
 .section.level1:has(.sim-source-frame),
@@ -269,16 +366,38 @@ selectizeInput(
   options = list(placeholder = "Tutte le forme giuridiche")
 )
 
+ateco_choices <- master |>
+  mutate(
+    codice_ateco = as.character(codice_ateco),
+    ateco = as.character(ateco),
+    ateco_label = case_when(
+      is.na(codice_ateco) | codice_ateco == "" ~ ateco,
+      is.na(ateco) | ateco == "" | ateco == "Non disponibile" ~ codice_ateco,
+      TRUE ~ paste0(codice_ateco, " — ", ateco)
+    )
+  ) |>
+  filter(
+    !is.na(codice_ateco),
+    codice_ateco != "",
+    !is.na(ateco_label),
+    ateco_label != ""
+  ) |>
+  distinct(codice_ateco, ateco_label) |>
+  arrange(codice_ateco)
+
 selectizeInput(
   "overview_ateco",
   "Codice / descrizione ATECO",
   choices = setNames(
-    safe_choices(master$codice_ateco),
-    safe_choices(master$codice_ateco)
+    ateco_choices$codice_ateco,
+    ateco_choices$ateco_label
   ),
   selected = character(0),
   multiple = TRUE,
-  options = list(placeholder = "Tutti i codici ATECO", maxOptions = 500)
+  options = list(
+    placeholder = "Tutti i codici ATECO",
+    maxOptions = 1000
+  )
 )
 
 checkboxGroupInput(
@@ -296,15 +415,6 @@ radioButtons(
   inline = TRUE
 )
 
-selectInput(
-  "overview_indicatore_mappa",
-  "Indicatore della mappa",
-  choices = c(
-    "Numero di enti" = "n_enti",
-    "Quota sul totale filtrato" = "quota_enti"
-  ),
-  selected = "n_enti"
-)
 
 actionButton("overview_reset", "Azzera filtri", icon = icon("rotate-left"))
 ```
@@ -454,49 +564,85 @@ Row {data-height=650}
 renderLeaflet({
   data <- overview_data()
 
-  reg <- data |>
-    filter(!is.na(codice_regione), codice_regione != "") |>
-    count(codice_regione, regione, name = "n_enti") |>
-    mutate(
-      quota_enti = if (nrow(data) > 0L) 100 * n_enti / nrow(data) else 0
-    ) |>
-    left_join(raccordo_regioni, by = "codice_regione")
+  label <- "Numero di enti"
 
-  indicator <- input$overview_indicatore_mappa
-  label <- if (indicator == "n_enti") "Numero di enti" else "Quota sul totale filtrato"
+  reg <- data |>
+    filter(
+      !is.na(codice_regione),
+      codice_regione != "",
+      codice_regione != "NA"
+    ) |>
+    count(codice_regione, name = "n_enti") |>
+    mutate(
+      quota_enti = if (nrow(data) > 0L) {
+        100 * n_enti / nrow(data)
+      } else {
+        0
+      }
+    ) |>
+    left_join(
+      raccordo_regioni,
+      by = "codice_regione"
+    ) |>
+    filter(
+      !is.na(NUTS_ID),
+      NUTS_ID != ""
+    ) |>
+    group_by(NUTS_ID) |>
+    summarise(
+      n_enti = sum(n_enti, na.rm = TRUE),
+      quota_enti = sum(quota_enti, na.rm = TRUE),
+      .groups = "drop"
+    )
 
   map_data <- nuts2_it |>
-    left_join(reg, by = "NUTS_ID") |>
+    left_join(
+      reg,
+      by = "NUTS_ID"
+    ) |>
     mutate(
-      valore_mappa = as.numeric(.data[[indicator]]),
-      display_val = if (indicator == "n_enti") {
-        ifelse(is.na(valore_mappa), "Nessun dato", fmt_num(valore_mappa))
-      } else {
-        ifelse(is.na(valore_mappa), "Nessun dato", fmt_pct(valore_mappa))
-      },
-      tooltip_txt = paste0(
-        "<b>", NUTS_NAME, "</b>",
-        "<br>", label, ": ", display_val,
-        "<br>Enti: ", ifelse(is.na(n_enti), "Nessun dato", fmt_num(n_enti))
-      )
+      n_enti = tidyr::replace_na(n_enti, 0L),
+      quota_enti = tidyr::replace_na(quota_enti, 0),
+      valore_mappa = as.numeric(n_enti),
+      regione_mappa = dplyr::coalesce(
+        as.character(NAME_LATN),
+        as.character(NUTS_NAME),
+        as.character(NUTS_ID)
+      ),
+         tooltip_txt = paste0(
+      "<b>", regione_mappa, "</b>",
+      "<br>Numero di enti: ", fmt_num(n_enti),
+      "<br>Quota sugli enti selezionati: ", fmt_pct(quota_enti)
     )
+    )
+
+  legend_values <- map_data$valore_mappa[
+    !is.na(map_data$valore_mappa)
+  ]
 
   pal <- leaflet::colorNumeric(
     palette = "Blues",
-    domain = map_data$valore_mappa,
+    domain = legend_values,
     na.color = "#eeeeee"
   )
 
+  labels <- lapply(
+    map_data$tooltip_txt,
+    htmltools::HTML
+  )
+
   leaflet(map_data) |>
-    addProviderTiles(leaflet::providers$CartoDB.Positron) |>
+    addProviderTiles(
+      leaflet::providers$CartoDB.Positron
+    ) |>
     addPolygons(
       fillColor = ~pal(valore_mappa),
       fillOpacity = 0.8,
       color = "white",
       weight = 1,
       opacity = 1,
-      popup = ~tooltip_txt,
-      label = ~htmltools::HTML(tooltip_txt),
+      popup = labels,
+      label = labels,
       highlightOptions = highlightOptions(
         weight = 2,
         color = "#333333",
@@ -506,7 +652,7 @@ renderLeaflet({
     ) |>
     addLegend(
       pal = pal,
-      values = ~valore_mappa,
+      values = legend_values,
       title = label,
       opacity = 0.8,
       position = "bottomright"
@@ -516,9 +662,28 @@ renderLeaflet({
 
 ### Enti del perimetro selezionato {data-width=70}
 
-```{r tabella-overview}
-renderDT({
-  dati_tabella <- overview_data() |>
+```{r tabella-overview-ui}
+htmltools::tagList(
+  htmltools::div(
+    class = "overview-table-tools",
+    downloadButton(
+      "download_overview_csv",
+      "CSV completo",
+      class = "btn btn-default btn-sm"
+    ),
+    downloadButton(
+      "download_overview_xlsx",
+      "Excel completo",
+      class = "btn btn-default btn-sm"
+    )
+  ),
+  DT::DTOutput("tabella_overview")
+)
+```
+
+```{r tabella-overview-server}
+overview_export_data <- reactive({
+  overview_data() |>
     transmute(
       `Nome ente` = nome_ente,
       `Codice fiscale` = codice_fiscale,
@@ -526,6 +691,7 @@ renderDT({
       Regione = regione,
       Provincia = provincia,
       Comune = comune,
+      `Codice forma giuridica` = codice_forma_giuridica,
       `Forma giuridica` = forma_giuridica,
       `Codice ATECO` = codice_ateco,
       `Descrizione ATECO` = ateco,
@@ -533,26 +699,44 @@ renderDT({
       S13 = presente_s13,
       BDAP = presente_bdap
     )
+})
 
-  datatable(
+output$download_overview_csv <- downloadHandler(
+  filename = function() {
+    paste0("enti_perimetro_SIM_filtrato_", Sys.Date(), ".csv")
+  },
+  content = function(file) {
+    readr::write_csv(
+      overview_export_data(),
+      file,
+      na = ""
+    )
+  }
+)
+
+output$download_overview_xlsx <- downloadHandler(
+  filename = function() {
+    paste0("enti_perimetro_SIM_filtrato_", Sys.Date(), ".xlsx")
+  },
+  content = function(file) {
+    openxlsx::write.xlsx(
+      overview_export_data(),
+      file,
+      overwrite = TRUE
+    )
+  }
+)
+
+output$tabella_overview <- DT::renderDT({
+  dati_tabella <- overview_export_data()
+
+  DT::datatable(
     dati_tabella,
     rownames = FALSE,
     filter = "top",
-    extensions = c("Buttons", "Scroller"),
+    extensions = c("Scroller"),
     options = list(
-      dom = "Bfrtip",
-      buttons = list(
-        list(
-          extend = "csv",
-          text = "Scarica CSV",
-          filename = "enti_perimetro_SIM"
-        ),
-        list(
-          extend = "excel",
-          text = "Scarica Excel",
-          filename = "enti_perimetro_SIM"
-        )
-      ),
+      dom = "frtip",
       pageLength = 15,
       scrollX = TRUE,
       scrollY = "430px",
@@ -565,10 +749,10 @@ renderDT({
 })
 ```
 
-Row {data-height=700}
+Row {data-height=820}
 -------------------------------------
 
-### Composizione per forma giuridica  {data-width=50}
+### Composizione per forma giuridica  {data-width=40}
 
 ```{r}
 renderPlotly({
@@ -625,7 +809,7 @@ renderPlotly({
 })
 ```
 
-### Principali attività ATECO  {data-width=50}
+### Principali attività ATECO  {data-width=60}
 
 ```{r}
 renderPlotly({
@@ -646,7 +830,7 @@ renderPlotly({
     mutate(
       ateco_label = stringr::str_wrap(
         ateco_label_completo,
-        width = 46
+        width = 70
       )
     )
 
@@ -667,7 +851,8 @@ renderPlotly({
       xaxis = list(
         title = "Numero di enti",
         rangemode = "tozero",
-        separatethousands = TRUE
+        separatethousands = TRUE,
+         automargin = TRUE
       ),
       yaxis = list(
         title = "",
@@ -675,7 +860,7 @@ renderPlotly({
         tickfont = list(size = 10)
       ),
       margin = list(
-        l = 340,
+        l = 390,
         r = 30,
         t = 20,
         b = 60
@@ -690,8 +875,9 @@ renderPlotly({
 ```
 
 Row {data-height=620}
-### Sovrapposizione dei perimetri
+-------------------------------------
 
+### Sovrapposizione dei perimetri
 ```{r}
 renderPlotly({
   tab <- overview_data() |>
