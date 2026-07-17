@@ -10,7 +10,6 @@ Per una consultazione immediata senza installare software, le dashboard sono acc
 
 
 ## 🛠️ Installazione e Sviluppo Locale
-La guida copre l'installazione di R, RStudio, Git e la configurazione delle librerie necessarie 
 
 ### Prima installazione
 
