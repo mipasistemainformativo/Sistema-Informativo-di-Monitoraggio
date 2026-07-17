@@ -1,6 +1,8 @@
 # 1. Dashboard madre
 
 ```r
+setwd("~/Desktop/Sistema-Informativo-di-Monitoraggio/Dashboard")
+
 rsconnect::deployApp(
   appDir = "SIM",
   appPrimaryDoc = "Sistemainformativo.Rmd",
