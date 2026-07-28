@@ -4,7 +4,7 @@ output:
   flexdashboard::flex_dashboard:
     orientation: rows
     vertical_layout: scroll
-    theme: cosmo
+    theme: flatly
     self_contained: false
 runtime: shiny
 params:
@@ -12,6 +12,35 @@ params:
   file_regioni: "data/fil_reg.rds"
   file_mappa: "data/regioni_shape.rds"
 ---
+
+```{css, echo=FALSE}
+/* NAVBAR — stesso blu per tutte le dashboard */
+.navbar, .navbar-inverse {
+  background-color: #1f4e79;
+  border-color: #1f4e79;
+}
+.navbar-inverse .navbar-brand { color:#fff; font-size:18px !important; }
+.navbar-inverse .navbar-nav > li > a { color:#fff; font-size:14px !important; white-space:nowrap; }
+/* SIDEBAR — font compatto 13px, spaziature ridotte */
+.section.sidebar,
+.section.sidebar label,
+.section.sidebar .control-label { font-size: 13px !important; }
+.section.sidebar .form-control,
+.section.sidebar .selectize-input {
+  font-size: 13px !important;
+  min-height: 34px !important;
+}
+.section.sidebar .form-group { margin-bottom: 12px !important; }
+.section.sidebar .btn { font-size: 13px !important; padding: 7px 12px !important; }
+/* VALUE BOX — angoli arrotondati e ombra leggera */
+.value-box {
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.08);
+}
+/* Tabelle DT più compatte */
+.datatables { font-size: 12px; }
+```
+
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
@@ -34,9 +63,10 @@ df <- fromJSON(params$file_indicators) %>%
   mutate(ind_val = as.numeric(ind_val))
 
 mappatura_nomi <- readRDS(params$file_regioni) %>%
-  select(codice_reg, reg)
+  select(codice_reg, reg) %>%
+  distinct()
 
-# Confini regionali locali: nessun download esterno durante l'avvio.
+# Confini regionali locali: 
 regioni_shape <- readRDS(params$file_mappa)
 
 # Calcolo etichette
@@ -44,7 +74,6 @@ anni_presenti <- as.numeric(df$fil_val[df$fil == "fil_anno"])
 label_periodo <- paste0(" (", min(anni_presenti, na.rm = TRUE), "-", max(anni_presenti, na.rm = TRUE), ")")
 format_ita <- function(x) {
   if (length(x) == 0) return(character(0))
-  # sapply può restituire liste se non stiamo attenti, forziamo il risultato a vettore di caratteri
   res <- sapply(x, function(v) {
     if (is.na(v)) return("NA")
     if (v == 0) return("0")
@@ -67,6 +96,7 @@ ind_pagoPA_categorie <- c("ind8"="ACI","ind9"="Comuni","ind10"="Consorzi univers
 ind_fasce_nomi <- c("ind31"="ACI","ind32"="Comuni","ind33"="Consorzi universitari","ind34"="Enti comunali","ind35"="Enti provinciali","ind36"="Enti regionali","ind37"="Ordini e collegi","ind38"="Province","ind39"="PA Centrali","ind40"="Regioni","ind41"="Ricerca","ind42"="Salute centrale","ind43"="Salute locale","ind44"="Salute regionale","ind45"="Salute servizi","ind46"="Scuola","ind47"="Università","ind48"="Altri enti territoriali","ind49"="Utility","ind50"="Enti donazioni")
 ind_regionali_map <- c("ind1"="Enti IO (Comuni)","ind2"="Servizi IO (Comuni)","ind3"="Enti IO (Istruzione)","ind4"="Servizi IO (Istruzione)","ind5"="Comuni attivi su SEND (n)","ind6"="Comuni attivi su SEND (%)")
 ```
+
 
 Overview Nazionale
 =======================================================================
@@ -96,7 +126,7 @@ Row
 ```{r}
 renderValueBox({
   valueBox(
-    format(sum(df$ind_val[df$ind == "ind7"], na.rm = TRUE), big.mark = "."),
+    format(sum(df$ind_val[df$ind == "ind7"], na.rm = TRUE), big.mark = ".", decimal.mark = ","),
     icon = "fa-database",
     color = "primary"
   )
@@ -108,7 +138,7 @@ renderValueBox({
 ```{r}
 renderValueBox({
   valueBox(
-    format(sum(df$ind_val[df$ind == "ind29"], na.rm = TRUE), big.mark = "."),
+    format(sum(df$ind_val[df$ind == "ind29"], na.rm = TRUE), big.mark = ".", decimal.mark = ","),
     icon = "fa-database",
     color = "success"
   )
@@ -120,7 +150,7 @@ renderValueBox({
 ```{r}
 renderValueBox({
   valueBox(
-    format(sum(df$ind_val[df$ind %in% paste0("ind", 8:26)], na.rm = TRUE), big.mark = "."),
+    format(sum(df$ind_val[df$ind %in% paste0("ind", 8:26)], na.rm = TRUE), big.mark = ".", decimal.mark = ","),
     icon = "fa-database",
     color = "warning"
   )
@@ -135,7 +165,7 @@ Row
 ```{r}
 renderValueBox({
   valueBox(
-    format(sum(df$ind_val[df$ind == "ind7" & df$fil_val == input$anno_ov], na.rm = TRUE), big.mark = "."),
+    format(sum(df$ind_val[df$ind == "ind7" & df$fil_val == input$anno_ov], na.rm = TRUE), big.mark = ".", decimal.mark = ","),
     caption = paste0("Messaggi IO anno ", input$anno_ov),
     icon = "fa-envelope",
     color = "primary"
@@ -148,7 +178,7 @@ renderValueBox({
 ```{r}
 renderValueBox({
   valueBox(
-    format(sum(df$ind_val[df$ind == "ind29" & df$fil_val == input$anno_ov], na.rm = TRUE), big.mark = "."),
+    format(sum(df$ind_val[df$ind == "ind29" & df$fil_val == input$anno_ov], na.rm = TRUE), big.mark = ".", decimal.mark = ","),
     caption = paste0("Notifiche SEND anno ", input$anno_ov),
     icon = "fa-paper-plane",
     color = "success"
@@ -161,7 +191,7 @@ renderValueBox({
 ```{r}
 renderValueBox({
   valueBox(
-    format(sum(df$ind_val[df$ind %in% paste0("ind", 8:26) & df$fil_val == input$anno_ov], na.rm = TRUE), big.mark = "."),
+    format(sum(df$ind_val[df$ind %in% paste0("ind", 8:26) & df$fil_val == input$anno_ov], na.rm = TRUE), big.mark = ".", decimal.mark = ","),
     caption = paste0("Transazioni PagoPA anno ", input$anno_ov),
     icon = "fa-euro-sign",
     color = "warning"
@@ -448,9 +478,10 @@ Sidebar {.sidebar}
 
 ```{r}
 selectInput(
-  "sel_ind_reg", "Scegli Indicatore:",
+  "sel_ind_reg", "2. Scegli Indicatore:",
   choices = setNames(names(ind_regionali_map), ind_regionali_map)
 )
+helpText("La mappa mostra la distribuzione regionale basata sui dati complessivi più recenti.")
 helpText(
   HTML(paste0(
     "<div style='font-size: 12px; color: #666; line-height: 1.5;'>",
@@ -459,36 +490,49 @@ helpText(
     "</div>"
   ))
 )
+
+dati_regionali_unici <- reactive({
+  req(input$sel_ind_reg)
+  
+  df %>% 
+    filter(
+      fil == "fil_reg",
+      ind == input$sel_ind_reg,
+      # Prendiamo solo il dato complessivo per evitare ripetizioni
+      anno == "Complessivo" 
+    ) %>%
+    # Sicurezza: se per caso ci fossero ancora doppioni, prendi il primo per ogni regione
+    distinct(fil_val, .keep_all = TRUE) %>%
+    mutate(cod_reg_clean = sprintf("%02d", as.numeric(fil_val)))
+})
+
 ```
 
 Row {data-height=700}
 -----------------------------------------------------------------------
 ### Mappa Geografica
 ```{r}
-plotlyOutput("mappa_regioni", height = "600px")
-output$mappa_regioni <- renderPlotly({
-  dati_m <- df %>% filter(fil == "fil_reg", ind == input$sel_ind_reg)
-  mf <- regioni_shape %>% left_join(dati_m, by = c("reg_code" = "fil_val"))
+renderPlotly({
+  dati <- dati_regionali_unici()
+  mf <- regioni_shape %>%
+    st_transform(4326) %>%
+    mutate(cod_reg_clean = sprintf("%02d", as.numeric(reg_code))) %>%
+    left_join(dati, by = "cod_reg_clean")
 
-  etichetta_ind <- unname(ind_regionali_map[input$sel_ind_reg])
-
-  mf <- mf %>%
-    mutate(
-      display_val = ifelse(is.na(ind_val), "Nessun dato",
-                            scales::label_number(big.mark = ".", decimal.mark = ",")(ind_val)),
-      tooltip_txt = paste0(reg_name, "\n", etichetta_ind, ": ", display_val)
-    )
+  nome_ind <- ind_regionali_map[input$sel_ind_reg]
 
   p <- ggplot(mf) +
-    geom_sf(aes(fill = ind_val, text = tooltip_txt), color = "white", linewidth = 0.35) +
-    scale_fill_distiller(
-      palette = "YlGnBu", direction = 1, na.value = "#f0f0f0", name = etichetta_ind
-    ) +
+    geom_sf(aes(fill = ind_val, 
+                text = paste0("<b>", reg_name, "</b><br>", 
+                              nome_ind, ": ", 
+                              format(coalesce(ind_val, 0), big.mark=".", decimal.mark=","))), 
+            color = "white", size = 0.1) +
+    scale_fill_distiller(palette = "Blues", direction = 1, na.value = "#f2f2f2") +
     theme_void() +
-    theme(legend.position = "bottom")
+    theme(legend.position = "none")
 
-  ggplotly(p, tooltip = "text") |>
-    layout(legend = list(orientation = "h")) |>
+  ggplotly(p, tooltip = "text") %>%
+    layout(margin = list(l=0, r=0, t=0, b=0)) %>%
     config(displayModeBar = FALSE)
 })
 ```
@@ -497,27 +541,26 @@ output$mappa_regioni <- renderPlotly({
 
 ```{r}
 renderPlotly({
-  reg_df <- df %>%
-    filter(fil == "fil_reg", ind == input$sel_ind_reg) %>%
+  dati <- dati_regionali_unici()
+  
+  reg_df <- dati %>%
     left_join(mappatura_nomi, by = c("fil_val" = "codice_reg")) %>%
-    arrange(desc(ind_val))
-  nome_indicatore <- ind_regionali_map[input$sel_ind_reg]
+    filter(!is.na(reg)) %>%
+    arrange(ind_val) %>%
+    mutate(reg = factor(reg, levels = unique(reg)))
 
-  p <- ggplot(reg_df, aes(x = reorder(reg, ind_val), y = ind_val)) +
-    geom_col(fill = "#5DADE2") +
+  nome_ind <- ind_regionali_map[input$sel_ind_reg]
+
+  p <- ggplot(reg_df, aes(x = reg, y = ind_val, 
+                          text = paste0(reg, "<br>", nome_ind, ": ", 
+                                        format(ind_val, big.mark=".", decimal.mark=",")))) +
+    geom_col(fill = "#2e86c1") +
     coord_flip() +
     theme_minimal() +
-    theme(
-      axis.text.y = element_text(size = 8),
-      axis.title.x = element_text(size = 12),
-      axis.title.y = element_text(size = 12)
-    ) +
-    labs(
-      x = "Regione",                          
-      y = nome_indicatore                      
-    )
+    labs(x = NULL, y = nome_ind)
 
-  ggplotly(p) %>% layout(margin = list(l = 180), height = 600)
+  ggplotly(p, tooltip = "text") %>%
+    layout(margin = list(l = 150))
 })
 ```
 
@@ -663,14 +706,12 @@ Row {data-height=600}
 
 ```{r}
 renderPlotly({
-  # req() assicura che il grafico non parta finché l'input non è pronto
   req(input$anno_io) 
   
   i_df <- df %>% 
     filter(ind == "ind7", fil_val == input$anno_io) %>% 
     arrange(sub_fil_val)
   
-  # Controllo dati vuoti
   if(nrow(i_df) == 0) return(NULL)
 
   i_df <- i_df %>%
@@ -713,7 +754,6 @@ Sidebar {.sidebar}
 selectInput("anno_send", "Anno:", choices = unique(df$fil_val[df$fil == "fil_anno"]))
 selectInput("mese_send", "Mese:", 
             choices = c("Tutti i mesi" = "TUTTI", sprintf("%02d", 1:12)))
-
 helpText(
   HTML(paste0(
     "<div style='font-size: 12px; color: #666; line-height: 1.5;'>",
@@ -725,19 +765,12 @@ helpText(
 ```
 
 ```{r}
-# Funzione reattiva interna per filtrare i dati SEND una sola volta
 dati_send_filtrati <- reactive({
   req(input$anno_send, input$mese_send)
-  
-  # Filtro base per anno
   d_base <- df %>% filter(fil_val == input$anno_send)
-  
-  # Filtro opzionale per mese
   if (input$mese_send != "TUTTI") {
     d_base <- d_base %>% filter(sub_fil_val == input$mese_send)
   }
-  
-  # Etichetta per le didascalie
   nomi_mesi <- c("01"="Gennaio","02"="Febbraio","03"="Marzo","04"="Aprile",
                  "05"="Maggio","06"="Giugno","07"="Luglio","08"="Agosto",
                  "09"="Settembre","10"="Ottobre","11"="Novembre","12"="Dicembre")
