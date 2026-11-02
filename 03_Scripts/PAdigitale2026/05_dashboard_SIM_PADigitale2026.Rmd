@@ -1291,9 +1291,7 @@ output$map_cov_copertura <- renderLeaflet({
   pal <- prepared$pal
 
   leaflet(map_data) |>
-    addProviderTiles(
-      "CartoDB.Positron"
-    ) |>
+    addTiles() |>
     addPolygons(
       fillColor = ~fill_color,
       fillOpacity = 0.8,
@@ -1766,7 +1764,7 @@ output$map_spatial_investimenti <- renderLeaflet({
   pal <- prepared$pal
 
   leaflet(map_data) |>
-    addProviderTiles("CartoDB.Positron") |>
+    addTiles() |>
     addPolygons(
       fillColor = ~fill_color,
       fillOpacity = 0.8,

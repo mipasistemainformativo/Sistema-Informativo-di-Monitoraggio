@@ -434,7 +434,7 @@ output$overview_mappa <- renderLeaflet({
   }
 
   leaflet(map_data) |>
-    addProviderTiles(providers$CartoDB.Positron) |>
+    addTiles() |>
     addPolygons(
       fillColor = ~pal(valore_mappa),
       fillOpacity = 0.78,

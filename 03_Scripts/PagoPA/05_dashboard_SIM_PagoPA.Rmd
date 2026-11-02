@@ -456,7 +456,7 @@ output$mappa_regioni <- renderLeaflet({
   pal <- colorNumeric("YlGnBu", mf$ind_val)
 
   leaflet(mf) %>%
-    addProviderTiles(providers$CartoDB.Positron) %>%
+    addTiles() %>%
     addPolygons(
       fillColor = ~pal(ind_val), weight = 1, color = "white", fillOpacity = 0.8,
       label = ~paste0(reg_name, ": ", format(ind_val, big.mark = "."))

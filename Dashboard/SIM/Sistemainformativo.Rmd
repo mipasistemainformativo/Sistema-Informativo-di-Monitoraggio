@@ -800,9 +800,7 @@ renderLeaflet({
   )
 
   leaflet(map_data) |>
-    addProviderTiles(
-      leaflet::providers$CartoDB.Positron
-    ) |>
+    addTiles() |>
     addPolygons(
       fillColor = ~pal(valore_mappa),
       fillOpacity = 0.8,

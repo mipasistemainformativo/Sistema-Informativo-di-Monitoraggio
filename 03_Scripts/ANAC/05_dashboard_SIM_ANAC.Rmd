@@ -475,7 +475,7 @@ output$mappa_anac <- renderLeaflet({
   etichette_popup <- paste0(mappa_final$reg_name, ": ", testo_valore)
   colori_poligoni <- ifelse(is.na(mappa_final$ind_val), "#f0f0f0", pal(mappa_final$ind_val))
   leaflet(mappa_final) %>%
-    addProviderTiles(providers$CartoDB.Positron) %>%
+    addTiles() %>%
     setView(lng = 12.5, lat = 41.9, zoom = 5) %>%
     addPolygons(fillColor = colori_poligoni, weight = 1, color = "white", fillOpacity = 0.8,
                 label = etichette_popup) %>%

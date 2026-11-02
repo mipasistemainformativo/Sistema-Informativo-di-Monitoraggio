@@ -55,6 +55,7 @@ suppressPackageStartupMessages({
   library(sf)
   library(ggplot2)
   library(DT)
+  library(leaflet)
 })
 
 #Caricamento dati e parametri
@@ -512,28 +513,61 @@ Row {data-height=700}
 -----------------------------------------------------------------------
 ### Mappa Geografica
 ```{r}
-renderPlotly({
+renderLeaflet({
   dati <- dati_regionali_unici()
+
   mf <- regioni_shape %>%
-    st_transform(4326) %>%
-    mutate(cod_reg_clean = sprintf("%02d", as.numeric(reg_code))) %>%
+    sf::st_transform(4326) %>%
+    mutate(
+      cod_reg_clean = sprintf("%02d", as.numeric(reg_code))
+    ) %>%
     left_join(dati, by = "cod_reg_clean")
 
   nome_ind <- ind_regionali_map[input$sel_ind_reg]
 
-  p <- ggplot(mf) +
-    geom_sf(aes(fill = ind_val, 
-                text = paste0("<b>", reg_name, "</b><br>", 
-                              nome_ind, ": ", 
-                              format(coalesce(ind_val, 0), big.mark=".", decimal.mark=","))), 
-            color = "white", size = 0.1) +
-    scale_fill_distiller(palette = "Blues", direction = 1, na.value = "#f2f2f2") +
-    theme_void() +
-    theme(legend.position = "none")
+  valori <- mf$ind_val
 
-  ggplotly(p, tooltip = "text") %>%
-    layout(margin = list(l=0, r=0, t=0, b=0)) %>%
-    config(displayModeBar = FALSE)
+  pal <- leaflet::colorNumeric(
+    palette = "Blues",
+    domain = valori,
+    na.color = "#f2f2f2"
+  )
+
+  etichette <- paste0(
+    "<b>", mf$reg_name, "</b><br>",
+    nome_ind, ": ",
+    ifelse(
+      is.na(valori),
+      "n.d.",
+      format(valori, big.mark = ".", decimal.mark = ",")
+    )
+  )
+
+  leaflet::leaflet(mf) %>%
+    leaflet::addTiles() %>%
+    leaflet::addPolygons(
+      fillColor = ~pal(ind_val),
+      fillOpacity = 0.8,
+      weight = 1,
+      color = "white",
+      label = lapply(etichette, htmltools::HTML),
+      highlightOptions = leaflet::highlightOptions(
+        weight = 2,
+        color = "#333333",
+        bringToFront = TRUE
+      )
+    ) %>%
+    leaflet::addLegend(
+      pal = pal,
+      values = valori,
+      title = nome_ind,
+      position = "bottomright"
+    ) %>%
+    leaflet::setView(
+      lng = 12.5,
+      lat = 42.5,
+      zoom = 5
+    )
 })
 ```
 

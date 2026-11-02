@@ -929,7 +929,7 @@ output$map_spatial_copertura <- renderLeaflet({
     )
 
   leaflet::leaflet(map_data) |>
-    leaflet::addProviderTiles("CartoDB.Positron") |>
+    leaflet::addTiles() |>
     leaflet::addPolygons(
       fillColor = ~fill_color, fillOpacity = 0.82, weight = 1, color = "#666666",
       popup = ~popup_html,
@@ -1126,7 +1126,7 @@ output$map_ov_personale <- renderLeaflet({
     )
 
   leaflet::leaflet(map_data) |>
-    leaflet::addProviderTiles("CartoDB.Positron") |>
+    leaflet::addTiles() |>
     leaflet::addPolygons(
       fillColor = ~fill_color, fillOpacity = 0.82, weight = 1, color = "#666666",
       popup = ~popup_html,
@@ -1272,7 +1272,7 @@ output$map_str_eta <- renderLeaflet({
       )
     )
   leaflet::leaflet(map_data) |>
-    leaflet::addProviderTiles("CartoDB.Positron") |>
+    leaflet::addTiles() |>
     leaflet::addPolygons(fillColor=~fill_color, fillOpacity=0.82,
       weight=1, color="#888", popup=~popup_html,
       label = ~lapply(popup_html, htmltools::HTML),
@@ -1398,7 +1398,7 @@ output$map_form_spesa <- renderLeaflet({
       )
     )
   leaflet::leaflet(map_data) |>
-    leaflet::addProviderTiles("CartoDB.Positron") |>
+    leaflet::addTiles() |>
     leaflet::addPolygons(fillColor=~fill_color, fillOpacity=0.82,
       weight=1, color="#888", popup=~popup_html,
       label = ~lapply(popup_html, htmltools::HTML),
