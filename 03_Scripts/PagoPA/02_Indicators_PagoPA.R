@@ -317,6 +317,14 @@ tryCatch({
   stop("Errore durante la creazione del file JSON: ", e$message)
 })
 
+stopifnot(file.exists(path_temp))
+
+stopifnot(file.copy(
+  path_temp,
+  "Dashboard/PagoPA/data/INDICATORS_PAGOPA.json",
+  overwrite = TRUE
+))
+
 #Carico su drive
 if (file.exists(path_temp)) {
   drive_upload(

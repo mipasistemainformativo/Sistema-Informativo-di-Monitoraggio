@@ -337,6 +337,14 @@ tryCatch({
   stop("Errore durante la creazione del file JSON: ", e$message)
 })
 
+stopifnot(file.exists(path_temp))
+
+stopifnot(file.copy(
+  path_temp,
+  "Dashboard/ANAC/data/INDICATORS_ANAC.json",
+  overwrite = TRUE
+))
+
 #Carico su drive
 if (file.exists(path_temp)) {
   drive_upload(

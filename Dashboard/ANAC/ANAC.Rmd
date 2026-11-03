@@ -56,6 +56,7 @@ suppressPackageStartupMessages({
   library(sf)
   library(DT)
   library(ggplot2)
+  library(leaflet)
 })
 
 dashboard_data <- readRDS("data/dashboard_data.rds")
@@ -233,7 +234,7 @@ format_ita_static <- function(x) {
   return(as.character(res)) 
 }
 
-mappatura_cpv <- readRDS("data/cpv.rds") %>%
+mappatura_cpv <- readRDS(params$file_cpv) %>%
   select(CODE, IT) %>%
   distinct()
 
@@ -530,9 +531,7 @@ selectInput("ind_reg", "Indicatore:",
             ))
 
 conditionalPanel(
-  condition = "['ind21','ind22','ind25','ind26','ind27'
-  #,'ind29','ind30','ind31'
-  ].includes(input.ind_reg)",
+  condition = "['ind21','ind22','ind25','ind26','ind27'].includes(input.ind_reg)",
   selectInput("mese_reg", "Mese:", choices = sprintf("%02d", 1:12))
 )
 
@@ -555,43 +554,87 @@ Row {data-height=800}
 ```{r}
 
 
-plotlyOutput("mappa_anac", height = "800px")
+leafletOutput("mappa_anac", height = "800px")
 
-output$mappa_anac <- renderPlotly({
-  req_df <- df_anac_reg %>% filter(fil_val == input$anno_reg, ind == input$ind_reg)
-  if (input$ind_reg %in% c("ind21","ind22","ind25","ind26","ind27"
-                           #,"ind29","ind30","ind31"
-                           )) {
-    req_df <- req_df %>% filter(sub_fil_val == input$mese_reg)
+output$mappa_anac <- renderLeaflet({
+
+  req_df <- df_anac_reg %>%
+    filter(fil_val == input$anno_reg, ind == input$ind_reg)
+
+  if (input$ind_reg %in% c("ind21", "ind22", "ind25", "ind26", "ind27")) {
+    req_df <- req_df %>%
+      filter(sub_fil_val == input$mese_reg)
   }
-  shiny::validate(shiny::need(nrow(req_df) > 0, "Dati non disponibili."))
 
-  mappa_final <- regioni_shape %>% left_join(req_df, by = c("reg_code" = "codice_reg"))
+  shiny::validate(
+    shiny::need(nrow(req_df) > 0, "Dati non disponibili.")
+  )
+
+  mappa_final <- regioni_shape %>%
+    sf::st_transform(4326) %>%
+    left_join(req_df, by = c("reg_code" = "codice_reg"))
+
   valori_validi <- mappa_final$ind_val[!is.na(mappa_final$ind_val)]
-  shiny::validate(shiny::need(length(valori_validi) > 0, "Nessun valore disponibile per questa selezione."))
+
+  shiny::validate(
+    shiny::need(
+      length(valori_validi) > 0,
+      "Nessun valore disponibile per questa selezione."
+    )
+  )
 
   etichetta_ind <- unname(nomi_indicatori_reg[input$ind_reg])
 
   mappa_final <- mappa_final %>%
     mutate(
-      display_val = ifelse(is.na(ind_val), "Nessun dato",
-                            scales::label_number(big.mark = ".", decimal.mark = ",")(ind_val)),
-      tooltip_txt = paste0(reg_name, "\n", etichetta_ind, ": ", display_val)
+      display_val = ifelse(
+        is.na(ind_val),
+        "Nessun dato",
+        scales::label_number(
+          big.mark = ".",
+          decimal.mark = ","
+        )(ind_val)
+      )
     )
 
-  p <- ggplot(mappa_final) +
-    geom_sf(aes(fill = ind_val, text = tooltip_txt), color = "white", linewidth = 0.35) +
-    scale_fill_distiller(
-      palette = "YlGnBu", direction = 1, na.value = "#f0f0f0", name = etichetta_ind
-    ) +
-    theme_void() +
-    theme(legend.position = "bottom")
+  pal <- leaflet::colorNumeric(
+    palette = "YlGnBu",
+    domain = valori_validi,
+    na.color = "#f0f0f0"
+  )
 
-  ggplotly(p, tooltip = "text") |>
-    layout(legend = list(orientation = "h")) |>
-    config(displayModeBar = FALSE)
+  etichette <- paste0(
+    "<b>", mappa_final$reg_name, "</b><br>",
+    etichetta_ind, ": ",
+    mappa_final$display_val
+  )
+
+  leaflet::leaflet(mappa_final) %>%
+    leaflet::addTiles() %>%
+    leaflet::addPolygons(
+      fillColor = ~pal(ind_val),
+      fillOpacity = 0.8,
+      color = "white",
+      weight = 1,
+      label = lapply(etichette, htmltools::HTML),
+      highlightOptions = leaflet::highlightOptions(
+        weight = 2,
+        color = "#333333",
+        bringToFront = TRUE
+      )
+    ) %>%
+    leaflet::addLegend(
+      pal = pal,
+      values = valori_validi,
+      title = etichetta_ind,
+      position = "bottomright"
+    ) %>%
+    leaflet::setView(
+      lng = 12.5,
+      lat = 42.5,
+      zoom = 5
+    )
 })
-
 ```
 
 
@@ -602,9 +645,7 @@ output$mappa_anac <- renderPlotly({
 
 renderPlotly({
   res_reg <- df_anac_reg %>% filter(fil_val == input$anno_reg, ind == input$ind_reg)
-  if (input$ind_reg %in% c("ind21","ind22","ind25","ind26","ind27","
-                           #ind29","ind30","ind31"
-                           )) {
+  if (input$ind_reg %in% c("ind21","ind22","ind25","ind26","ind27")) {
     res_reg <- res_reg %>% filter(sub_fil_val == input$mese_reg)
   }
   
@@ -649,9 +690,7 @@ renderDT({
   req(input$anno_reg)
   tab <- df_anac_reg %>%
     filter(fil_val == input$anno_reg, is.na(sub_fil_val),
-           ind %in% c("ind10", "ind11", "ind14", "ind15", "ind16"
-                      #, "ind18", "ind19", "ind20"
-                      )) %>%
+           ind %in% c("ind10", "ind11", "ind14", "ind15", "ind16")) %>%
     select(regione_bdap, ind, ind_val) %>%
     pivot_wider(names_from = ind, values_from = ind_val) %>%
     arrange(desc(ind15))
@@ -753,9 +792,7 @@ renderDT({
   req(input$anno_fg)
   tab <- df_fg_confronto %>%
     filter(fil_val == input$anno_fg) %>%
-    select(sub_fil_val, ind32, ind33, ind36, ind37, ind38
-           #, ind40, ind41, ind42
-           ) %>%
+    select(sub_fil_val, ind32, ind33, ind36, ind37, ind38) %>%
     arrange(desc(ind37))
   
   datatable(

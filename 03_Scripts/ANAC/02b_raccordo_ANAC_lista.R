@@ -45,7 +45,7 @@ file_CIG <- drive_ls(as_id("1uCyXCfMh-2da9AKRF73QbP_Okm8yQzhi")) %>%
 file_raccordo <- drive_ls(as_id("15Y8dcyzbFOEdIJc0wRszx9uJT16kqyEs")) %>% 
   filter(name == "Lista_raccordo_SIM.xlsx")
 file_CPV <- drive_ls(as_id("1QJXViD9ilV0VJ2n7r7RHX93z5c2IV9Oy")) %>% 
-  filter(name == "fil_cpv.rds") 
+  filter(name == "cpv.rds")
 
 #import Lista
 path_lista <- file.path(temp_dir, "Lista_raccordo_SIM.xlsx")
@@ -58,7 +58,7 @@ lista <- read_excel(path_lista)
 message("File Lista_raccordo_SIM.xlsx caricato correttamente")
 
 #import Lista
-path_CPV <- file.path(temp_dir, "fil_cpv.rds")
+path_CPV <- file.path(temp_dir, "cpv.rds")
 drive_download(
   file = as_id(file_CPV$id), 
   path = path_CPV,
@@ -66,6 +66,16 @@ drive_download(
 )
 CPV <- read_rds(path_CPV)
 message("File CPV.xlsx caricato correttamente")
+
+# Input per il deploy della dashboard ANAC
+dest_CPV <- "Dashboard/ANAC/data/cpv.rds"
+
+stopifnot(
+  all(c("CODE", "IT") %in% names(CPV)),
+  dir.exists(dirname(dest_CPV))
+)
+
+stopifnot(file.copy(path_CPV, dest_CPV, overwrite = TRUE))
 
 #import CIG
 path_cig <- file.path(temp_dir, "CIG_2023.rds")
@@ -96,10 +106,25 @@ rm(file_CIG, file_raccordo, file_CPV)
 #                              LEFT JOIN 
 ################################################################################
 # Eseguiamo il join con macrocategorie di cpv 
-cig_2023_finale <- cig_2023_macro %>%
-  left_join(CPV %>% select(cpv_division, cpv_cat), 
-            by = "cpv_division")
+# Ricava le 45 divisioni CPV dal file dettagliato
+CPV_divisioni <- CPV %>%
+  filter(grepl("^[0-9]{2}000000-[0-9]$", CODE)) %>%
+  transmute(
+    cpv_division = substr(CODE, 1, 2),
+    cpv_cat = IT
+  )
 
+stopifnot(
+  nrow(CPV_divisioni) == 45L,
+  !anyDuplicated(CPV_divisioni$cpv_division)
+)
+
+# Raccordo dei contratti alle macrocategorie
+cig_2023_finale <- cig_2023_macro %>%
+  left_join(
+    CPV_divisioni,
+    by = "cpv_division"
+  )
 # Eseguiamo il join con lista 
 dataset_unito <- lista %>%
   left_join(cig_2023_finale, by = c("codice_fiscale" = "cf_amministrazione_appaltante"))
