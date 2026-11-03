@@ -5,6 +5,6 @@ account: mipasistemainformativo
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 17607998
-bundleId: 12267511
+bundleId: 12774913
 url: https://mipasistemainformativo.shinyapps.io/ANAC/
 version: 1

@@ -5,6 +5,6 @@ account: mipasistemainformativo
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 17609542
-bundleId: 12267362
+bundleId: 12770402
 url: https://mipasistemainformativo.shinyapps.io/pagopa/
 version: 1
